@@ -1,7 +1,9 @@
 from urllib.parse import urlencode
 
 ACCOUNT_URL = "https://account.bilibili.com/account/home"
-LOGIN_URL = "https://passport.bilibili.com/login"
+# Bare https://passport.bilibili.com/login answers HTTP 404 and Chrome treats it as a
+# download. The PC passport page is the official web login document (HTTP 200).
+LOGIN_URL = "https://passport.bilibili.com/pc/passport/login"
 FAVORITES_URL = "https://space.bilibili.com/{uid}/favlist"
 WATCH_LATER_URL = "https://www.bilibili.com/watchlater"
 

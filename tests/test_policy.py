@@ -14,6 +14,7 @@ def test_bilibili_feed_and_allowed_pages() -> None:
     assert policy.classify("https://search.bilibili.com/zh-Hans/all?keyword=test&page=2&o=30") == ALLOW
     assert policy.classify("https://www.bilibili.com/video/BV1HJWu69EAY/") == ALLOW
     assert policy.classify("https://passport.bilibili.com/login?site=OVERSEAS") == ALLOW
+    assert policy.classify("https://passport.bilibili.com/pc/passport/login") == ALLOW
     assert policy.classify("https://account.bilibili.com/account/home") == ALLOW
     assert policy.classify("https://space.bilibili.com/123/favlist") == ALLOW
     assert policy.classify("https://www.bilibili.com/watchlater") == ALLOW

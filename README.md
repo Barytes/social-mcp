@@ -83,7 +83,8 @@ uv run xhs-mcp
 1. **扫码（优先）**  
    `login_qr_start` 打开官方登录页，把二维码截成 PNG，返回绝对路径，并作为 MCP 图片内容返回。用手机相册或另一块屏幕扫。  
    B 站用 App 扫。小红书页面写的是小红书或微信。  
-   `login_qr_wait`（默认 90 秒，最长 180 秒）在当前页等到：已登录、二维码过期、需要人处理，或超时。等待期间这个浏览器被占用。
+   `login_qr_wait`（默认 90 秒，单次最长 180 秒）在当前页等到：已登录、二维码过期、需要人处理，或这一轮时间用完。等待期间这个浏览器被占用。  
+   同一张二维码在过期前可以反复调用 `login_qr_wait`。它不会重新打开登录页，所以不会把正在扫的码换掉。还没扫完时返回 `qr_pending`，`qr_still_valid` 为 true。页面显示出过期时返回 `qr_expired`，这时才重新 `login_qr_start`。冒烟命令的 `--wait` 仍然最长 180 秒。
 2. **短信**  
    `login_sms_request(phone)` 再 `login_sms_submit(code)`。号码和验证码只作为工具参数，不进日志，也不会在结果里回显。  
    B 站短信页写着未注册手机号会自动注册，这是官网表单的行为。  
@@ -93,7 +94,7 @@ uv run xhs-mcp
 
 `login_status` 会打开非推荐流页面核对：
 
-- B 站：`https://account.bilibili.com/account/home`。未登录时会跳到 `passport.bilibili.com`（已在未登录状态下看过）。已登录应能看到昵称或 UID；选择器对不上就返回 `login_state_unclear`，不会假装已登录。
+- B 站：`https://account.bilibili.com/account/home`。未登录时会跳到 `passport.bilibili.com`。已登录应能看到昵称或 UID；选择器对不上就返回 `login_state_unclear`，不会假装已登录。扫码和短信打开的是 `https://passport.bilibili.com/pc/passport/login`。裸的 `https://passport.bilibili.com/login` 会 HTTP 404，Chrome 把它当成下载；这时返回 `page_load_failed`，并写明页面没有作为文档打开。账号页如果也因此打不开，会再试一次这个 PC 登录页，用来区分「未登录」和「登录页没加载」。
 - 小红书：先打开 `/login`。能看到二维码或手机号框就是未登录。若被重定向到发现页，会立刻离开，再看搜索页头部。风控页单独返回 `needs_human_verification`。
 
 ## 工具
@@ -150,7 +151,7 @@ uv run pytest
 看过并且写进选择器的：
 
 - B 站搜索页卡片：`.bili-video-card`、标题、BV 链接、UP 主、播放文案、时长、日期、`button.vui_pagenation--btn-side`（「下一页」）。`page=2` 会换一批结果，地址会变成 `/zh-Hans/all`。
-- B 站未登录时，`account.bilibili.com/account/home` 会跳到 `passport.bilibili.com/login?site=OVERSEAS`。美国 IP 上的登录页左侧是 `.login-scan__qrcode img`，短信页是「短信登录」、`input[placeholder=请输入手机号]`、「获取验证码」、`input[placeholder=请输入验证码]`、「登录/注册」。
+- B 站未登录时，`account.bilibili.com/account/home` 会跳到 `passport.bilibili.com/login?gourl=...&site=OVERSEAS`。直接打开 `https://passport.bilibili.com/pc/passport/login` 返回 HTTP 200，并落到同一套海外登录页（地址栏带 `site=OVERSEAS`）。左侧仍是 `.login-scan__qrcode img`。点「短信登录」之后是 `input[placeholder=请输入手机号]`、「获取验证码」、`input[placeholder=请输入验证码]`、「登录/注册」。这次核对没有提交短信，也没有扫码。裸的 `/login` 用 HEAD 请求是 HTTP 404；目标机器上 Playwright 打开它会报 `Download is starting`。
 - B 站搜索页未登录头部有 `.header-avatar-unlogin-entry`。
 - B 站视频页：`h1.video-title`、`.desc-info-text`、`a.up-name`、`.video-tag-container a.tag-link`。页面会先闪一下「出错啦」再出来，所以详情会多等几秒。发布日期选择器没有在真站上对上，可能是空的。
 - 小红书有界面登录页：`img.qrcode-img`、`input[placeholder=输入手机号]`、`input[placeholder=输入验证码]`、`获取验证码`、`button.submit`「登录」。
@@ -175,3 +176,5 @@ uv run pytest
 - 小红书新的网页登录会踢掉这个 profile 里的网页会话。手机 App 一般还在，但别的网页端会掉线。
 - 二维码 PNG 等价于一次登录入口，只放在 `~/.local/share/.../qr/`，不要拷进仓库。
 - 播放量取的是搜索卡片左侧第一项文案，和页面上看到的一致，不另做换算。
+- 搜索标题里的 HTML 实体（例如 `OP&amp;ED`）会解成普通字符。链接里的 `xsec_token` 仍原样保留。
+- 小红书有界面模式会注册 Service Worker。这类请求没有 frame，路由不能因此抛错，也不能因此放行推荐流或非 GET/HEAD/OPTIONS 的 worker 请求。

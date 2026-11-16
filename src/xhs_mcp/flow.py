@@ -21,12 +21,12 @@ from mcp_browser.errors import (
     NeedsHumanVerification,
     NotLoggedIn,
     PageNotUnderstood,
-    QrExpired,
     SiteError,
     SmsFormNotReady,
     SmsRejected,
 )
 from mcp_browser.guard import ClickPurpose, FillPurpose
+from mcp_browser.qr import expired_error, not_ready_payload, pending_payload, text_says_expired
 from mcp_browser.redact import redact
 
 from xhs_mcp.parse import classify_xhs_search, parse_xhs_identity, parse_xhs_note
@@ -34,7 +34,6 @@ from xhs_mcp.urls import LOGIN_URL, xhs_search_url
 
 log = logging.getLogger(__name__)
 
-_QR_EXPIRED = ("二维码已过期", "二维码已失效", "已失效", "点击刷新")
 _QR_CONFIRM = ("扫描成功", "请在手机上确认", "确认登录")
 _LOGGED_OUT = (
     "未登录。小红书同一账号只保留一个网页会话：新的网页登录会把这次会话踢下线。"
@@ -267,23 +266,54 @@ async def login_qr_start(session) -> dict:
         return {"ok": False, "error_type": "internal_error", "status": "internal_error", "message": redact(str(exc))[:300]}
 
 
+async def _qr_visible(page) -> bool:
+    locator = page.locator("img.qrcode-img").first
+    try:
+        if await locator.count() == 0:
+            return False
+        box = await locator.bounding_box()
+    except Exception:
+        return False
+    return bool(box and box.get("width", 0) >= 80 and box.get("height", 0) >= 80)
+
+
+async def _qr_text(page) -> str:
+    # Visible text, not a single widget: the expiry line is not always inside one class.
+    try:
+        return await page.inner_text("body")
+    except Exception:
+        return ""
+
+
 async def login_qr_wait(session, timeout_s: float = 90) -> dict:
     if not isinstance(timeout_s, (int, float)) or isinstance(timeout_s, bool) or not 1 <= float(timeout_s) <= 180:
         return InvalidArgument("timeout_s must be between 1 and 180.").payload()
 
     async def op(page):
+        # Do not open the login URL here. A second navigation replaces the QR.
+        text = await _qr_text(page)
+        if text_says_expired(text):
+            raise expired_error(page.url)
+        if not await _qr_visible(page):
+            if "/login" not in (page.url or "") and "website-login/error" not in (page.url or ""):
+                return await _read_identity(page, session)
+            return {"pending": "qr_not_ready", "url": page.url}
         deadline = time.monotonic() + float(timeout_s)
         while time.monotonic() < deadline:
             await _ensure_no_challenge(page, session)
-            text = await _body_text(page)
-            if any(phrase in text for phrase in _QR_EXPIRED):
-                raise QrExpired("The QR code expired. Call login_qr_start again.", url=page.url)
-            if "/login" not in (page.url or "") and "website-login/error" not in (page.url or ""):
-                return await _read_identity(page, session)
+            text = await _qr_text(page)
+            if text_says_expired(text):
+                raise expired_error(page.url)
+            if not await _qr_visible(page):
+                if "/login" not in (page.url or "") and "website-login/error" not in (page.url or ""):
+                    return await _read_identity(page, session)
+                return {"pending": "qr_not_ready", "url": page.url}
             if any(phrase in text for phrase in _QR_CONFIRM):
                 return {"logged_in": None, "pending": "awaiting_confirmation", "url": page.url}
             await page.wait_for_timeout(2000)
-        return {"logged_in": None, "pending": "timeout", "url": page.url}
+        if text_says_expired(await _qr_text(page)):
+            raise expired_error(page.url)
+        return {"logged_in": None, "pending": "qr_pending", "url": page.url}
 
     try:
         identity = await session.call("login_qr_wait", op)
@@ -296,19 +326,25 @@ async def login_qr_wait(session, timeout_s: float = 90) -> dict:
         return _logged_in(identity)
     if identity.get("logged_in") is False:
         return _logged_out(identity.get("url") or "")
-    if identity.get("pending") == "awaiting_confirmation":
+    pending = identity.get("pending")
+    url = identity.get("url")
+    if pending == "qr_pending":
+        return pending_payload(url)
+    if pending == "qr_not_ready":
+        return not_ready_payload(url)
+    if pending == "awaiting_confirmation":
         return {
             "ok": True,
             "status": "awaiting_confirmation",
-            "message": "The page says the QR was scanned. Confirm it on the phone. A new web login replaces other web sessions.",
-            "url": identity.get("url"),
+            "message": "页面显示已经扫到。请在手机上确认。确认后再次调用 login_qr_wait。新的网页登录会使这个账号的其他网页会话失效。",
+            "url": url,
         }
     return {
         "ok": False,
         "error_type": "timeout",
         "status": "timeout",
-        "message": "The QR was not confirmed before the timeout.",
-        "url": identity.get("url"),
+        "message": "这次等待结束时二维码还没确认。如果它还在页面上，再次调用 login_qr_wait，不要重新 login_qr_start。",
+        "url": url,
     }
 
 

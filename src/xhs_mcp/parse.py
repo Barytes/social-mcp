@@ -7,6 +7,7 @@ live because search required a login and this environment did not sign in.
 
 from __future__ import annotations
 
+import html
 import re
 from urllib.parse import urlsplit, urlunsplit
 
@@ -19,7 +20,7 @@ _EMPTY = ("未找到相关", "没有找到相关", "换个词", "搜索结果为
 def _clean(text: str | None) -> str | None:
     if not text:
         return None
-    cleaned = re.sub(r"\s+", " ", text).strip()
+    cleaned = re.sub(r"\s+", " ", html.unescape(text)).strip()
     return cleaned or None
 
 
@@ -135,7 +136,7 @@ def parse_xhs_note(html: str, url: str) -> dict | None:
     author_el = soup.select_one(".author-container .username, .author-wrapper .name, .username")
     tags: list[str] = []
     for tag in soup.select("a.tag, #hash-tag a, a.hash-tag"):
-        text = tag.get_text(" ", strip=True).lstrip("#")
+        text = (_clean(tag.get_text(" ", strip=True)) or "").lstrip("#")
         if text and text not in tags:
             tags.append(text)
     parsed = _note_from_href(urlsplit(url).path)
@@ -143,11 +144,11 @@ def parse_xhs_note(html: str, url: str) -> dict | None:
     if note_id is None:
         match = _NOTE_HREF.search(urlsplit(url).path)
         note_id = match.group(1) if match else None
-    description = desc_el.get_text(" ", strip=True) if desc_el else ""
+    description = _clean(desc_el.get_text(" ", strip=True) if desc_el else None) or ""
     return {
         "note_id": note_id,
         "url": url,
-        "title": title_el.get_text(" ", strip=True),
+        "title": _clean(title_el.get_text(" ", strip=True)),
         "author": _clean(author_el.get_text(" ", strip=True) if author_el else None),
         "description": description[:4000] or None,
         "tags": tags[:30],
@@ -167,7 +168,7 @@ def parse_xhs_identity(html: str, url: str, text: str) -> dict:
         element = soup.select_one(selector)
         if element is None:
             continue
-        value = element.get_text(" ", strip=True)
+        value = _clean(element.get_text(" ", strip=True))
         if value and value not in {"登录", "我"}:
             nickname = value
             break

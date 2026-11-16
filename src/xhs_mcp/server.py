@@ -52,7 +52,11 @@ def build_server(session) -> MCPServer:
 
     @server.tool(annotations=READ, structured_output=False)
     async def login_qr_wait(timeout_s: float = 90) -> str:
-        """在当前登录页上等扫码完成、过期，或出现需要人处理的验证。timeout_s 为 1–180。"""
+        """在当前登录页上等扫码完成、过期，或出现需要人处理的验证。
+
+        timeout_s 为 1–180。同一张二维码在过期前可以反复调用本工具，不会重新打开登录页，因此不会把正在扫的码换掉。
+        还没扫完时返回 qr_pending（qr_still_valid 为 true）。页面显示过期时返回 qr_expired，这时才重新 login_qr_start。
+        """
         return dumps(await flow.login_qr_wait(session, timeout_s))
 
     @server.tool(annotations=LOGIN, structured_output=False)

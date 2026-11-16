@@ -14,6 +14,18 @@ from mcp_browser.redact import redact
 log = logging.getLogger(__name__)
 
 
+def page_load_message(exc: BaseException, url: str) -> str:
+    """Turn a Playwright navigation error into something an operator can act on."""
+    text = str(exc)
+    if "download is starting" in text.lower():
+        return (
+            "The page did not load as a document. The browser started a download instead, "
+            "which usually means this URL is not an HTML page (often HTTP 404). "
+            f"URL: {url}"
+        )
+    return redact(text)[:300]
+
+
 def _target_from_attributes(attrs: dict[str, str], text: str) -> ClickTarget:
     return ClickTarget(
         text=text,
@@ -94,7 +106,7 @@ async def goto_allowed(
             ) from exc
         if blocked:
             raise NavigationDenied("Navigation left the allowlist.", url=blocked) from exc
-        raise PageLoadFailed(redact(str(exc))[:300], url=url) from exc
+        raise PageLoadFailed(page_load_message(exc, url), url=url) from exc
     final = page.url
     final_decision = policy.classify(final)
     if final_decision == FEED:
@@ -107,8 +119,13 @@ async def goto_allowed(
         await _blank(page)
         raise NavigationDenied("Landed on a URL that is not allowlisted.", url=final)
     status = getattr(response, "status", None) if response is not None else None
-    if isinstance(status, int) and status >= 500:
-        raise PageLoadFailed(f"The page returned HTTP {status}.", url=final)
+    if isinstance(status, int) and status >= 400:
+        await _blank(page)
+        raise PageLoadFailed(
+            f"The page failed to load (HTTP {status}). URL: {final or url}",
+            url=final or url,
+            http_status=status,
+        )
     return final
 
 
@@ -133,7 +150,13 @@ async def save_screenshot(page: Any, directory: Path, name: str, policy: Documen
 
 async def visible_challenge(page: Any) -> bool:
     """True when a captcha widget is actually on screen, not merely present in the DOM."""
-    selectors = (".geetest_panel", ".geetest_holder", ".body__captcha-input", ".captcha-box")
+    selectors = (
+        ".geetest_panel",
+        ".geetest_holder",
+        ".body__captcha-input",
+        ".captcha-box",
+        "input[placeholder*='图片']",
+    )
     for selector in selectors:
         locator = page.locator(selector).first
         try:

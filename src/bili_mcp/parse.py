@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import re
 
 from bs4 import BeautifulSoup
@@ -15,7 +16,7 @@ _EMPTY = ("没有找到相关", "没有相关数据", "搜索结果为空", "啥
 def _clean(text: str | None) -> str | None:
     if not text:
         return None
-    cleaned = text.replace("·", " ")
+    cleaned = html.unescape(text).replace("·", " ")
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned or None
 
@@ -52,7 +53,7 @@ def parse_bili_search(html: str) -> tuple[list[dict], str]:
         date_el = card.select_one(".bili-video-card__info--date")
         duration_el = card.select_one(".bili-video-card__stats__duration")
         image = card.select_one("img[src]")
-        title = (title_el.get("title") or title_el.get_text(" ", strip=True) or "").strip()
+        title = _clean(title_el.get("title") or title_el.get_text(" ", strip=True)) or ""
         results.append(
             {
                 "title": title,
@@ -99,7 +100,7 @@ def parse_bili_video(html: str, bvid: str) -> dict | None:
     title_el = soup.select_one("h1.video-title")
     if title_el is None:
         return None
-    title = title_el.get_text(" ", strip=True)
+    title = _clean(title_el.get_text(" ", strip=True)) or ""
     if not title or "出错啦" in title:
         return None
     desc_el = soup.select_one(".desc-info-text") or soup.select_one(".basic-desc-info")
@@ -107,10 +108,10 @@ def parse_bili_video(html: str, bvid: str) -> dict | None:
     date_el = soup.select_one(".pubdate-ip-text") or soup.select_one(".pubdate-text") or soup.select_one(".pubdate")
     tags: list[str] = []
     for tag in soup.select(".video-tag-container a.tag-link"):
-        text = tag.get_text(" ", strip=True)
+        text = _clean(tag.get_text(" ", strip=True))
         if text and text not in tags:
             tags.append(text)
-    description = desc_el.get_text(" ", strip=True) if desc_el else ""
+    description = _clean(desc_el.get_text(" ", strip=True) if desc_el else None) or ""
     return {
         "bvid": bvid,
         "title": title,
@@ -137,7 +138,7 @@ def parse_bili_identity(html: str, url: str) -> dict:
         element = soup.select_one(selector)
         if element is None:
             continue
-        text = element.get_text(" ", strip=True)
+        text = _clean(element.get_text(" ", strip=True))
         if text and text not in {"登录", "登录/注册"}:
             nickname = text
             break

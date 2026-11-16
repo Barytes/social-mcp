@@ -19,13 +19,14 @@ from mcp_browser.errors import (
     LoginUiNotFound,
     NeedsHumanVerification,
     NotLoggedIn,
+    PageLoadFailed,
     PageNotUnderstood,
-    QrExpired,
     SiteError,
     SmsFormNotReady,
     SmsRejected,
 )
 from mcp_browser.guard import ClickPurpose, FillPurpose
+from mcp_browser.qr import expired_error, not_ready_payload, pending_payload, text_says_expired
 from mcp_browser.redact import redact
 
 from bili_mcp.parse import classify_bili_search, parse_bili_identity, parse_bili_video
@@ -34,7 +35,6 @@ from bili_mcp.urls import ACCOUNT_URL, LOGIN_URL, bili_search_url, bili_video_ur
 log = logging.getLogger(__name__)
 
 _BVID = re.compile(r"^BV[0-9A-Za-z]{10}$")
-_QR_EXPIRED = ("二维码已过期", "二维码已失效", "点击刷新")
 _QR_CONFIRM = ("扫描成功", "请在手机上确认", "确认登录")
 
 
@@ -137,7 +137,13 @@ async def _click_exact(page, label: str, purpose: ClickPurpose) -> None:
 
 
 async def _read_identity(page, session) -> dict:
-    final = await goto_allowed(page, ACCOUNT_URL, session.policy, session)
+    try:
+        final = await goto_allowed(page, ACCOUNT_URL, session.policy, session)
+    except PageLoadFailed:
+        # A logged-out account page redirects at passport /login, which 404s and
+        # Chrome may treat as a download. The PC passport page is the document.
+        log.info("account page did not load; opening the official login page")
+        final = await goto_allowed(page, LOGIN_URL, session.policy, session)
     try:
         await page.wait_for_selector(
             ".header-avatar-unlogin-entry, .home-name, .nickname, .user-name",
@@ -208,8 +214,9 @@ async def login_qr_start(session) -> dict:
         saved = await _capture_qr(page, session.config.qr_path)
         if not saved:
             raise LoginUiNotFound(
-                "The official login page did not show a QR image. Selectors are for the overseas passport page "
-                "seen from a non-China network; a domestic layout may differ.",
+                "The official login page did not show a QR image. Selectors were checked on "
+                "https://passport.bilibili.com/pc/passport/login (overseas layout, site=OVERSEAS). "
+                "A domestic layout may differ.",
                 url=page.url,
                 selectors_tried=[".login-scan__qrcode img", ".login-scan__qrcode"],
             )
@@ -248,31 +255,61 @@ async def _capture_qr(page, dest) -> bool:
     return False
 
 
+async def _qr_visible(page) -> bool:
+    locator = page.locator(".login-scan__qrcode img").first
+    try:
+        if await locator.count() == 0:
+            return False
+        box = await locator.bounding_box()
+    except Exception:
+        return False
+    return bool(box and box.get("width", 0) >= 80 and box.get("height", 0) >= 80)
+
+
+async def _qr_text(page) -> str:
+    parts: list[str] = []
+    locator = page.locator(".login-scan").first
+    try:
+        if await locator.count():
+            parts.append(await locator.inner_text())
+    except Exception:
+        pass
+    try:
+        parts.append(await page.inner_text("body"))
+    except Exception:
+        pass
+    return "\n".join(parts)
+
+
 async def login_qr_wait(session, timeout_s: float = 90) -> dict:
     if not isinstance(timeout_s, (int, float)) or isinstance(timeout_s, bool) or not 1 <= float(timeout_s) <= 180:
         return InvalidArgument("timeout_s must be between 1 and 180.").payload()
     timeout_s = float(timeout_s)
 
     async def op(page):
+        # Stay on the current document. Opening the login URL again would replace the QR.
+        if text_says_expired(await _qr_text(page)):
+            raise expired_error(page.url)
+        if not await _qr_visible(page):
+            if "passport.bilibili.com" not in (page.url or ""):
+                return await _read_identity(page, session)
+            return {"pending": "qr_not_ready", "url": page.url}
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             await _ensure_no_challenge(page, session)
-            scan_text = ""
-            locator = page.locator(".login-scan").first
-            try:
-                if await locator.count():
-                    scan_text = await locator.inner_text()
-            except Exception:
-                scan_text = ""
-            if any(phrase in scan_text for phrase in _QR_EXPIRED):
-                raise QrExpired("The QR code expired. Call login_qr_start again.", url=page.url)
-            if "passport.bilibili.com" not in (page.url or ""):
-                identity = await _read_identity(page, session)
-                return identity
+            scan_text = await _qr_text(page)
+            if text_says_expired(scan_text):
+                raise expired_error(page.url)
+            if not await _qr_visible(page):
+                if "passport.bilibili.com" not in (page.url or ""):
+                    return await _read_identity(page, session)
+                return {"pending": "qr_not_ready", "url": page.url}
             if any(phrase in scan_text for phrase in _QR_CONFIRM):
                 return {"logged_in": None, "pending": "awaiting_confirmation", "url": page.url}
             await page.wait_for_timeout(2000)
-        return {"logged_in": None, "pending": "timeout", "url": page.url}
+        if text_says_expired(await _qr_text(page)):
+            raise expired_error(page.url)
+        return {"logged_in": None, "pending": "qr_pending", "url": page.url}
 
     try:
         identity = await session.call("login_qr_wait", op)
@@ -281,24 +318,33 @@ async def login_qr_wait(session, timeout_s: float = 90) -> dict:
     except Exception as exc:
         log.exception("login_qr_wait failed")
         return {"ok": False, "error_type": "internal_error", "status": "internal_error", "message": redact(str(exc))[:300]}
+    return _finish_qr_wait(identity)
+
+
+def _finish_qr_wait(identity: dict) -> dict:
     if identity.get("logged_in") is True:
         return _logged_in(identity)
     if identity.get("logged_in") is False:
         return _logged_out(identity.get("url") or "")
     pending = identity.get("pending")
+    url = identity.get("url")
+    if pending == "qr_pending":
+        return pending_payload(url)
+    if pending == "qr_not_ready":
+        return not_ready_payload(url)
     if pending == "awaiting_confirmation":
         return {
             "ok": True,
             "status": "awaiting_confirmation",
-            "message": "The page says the QR was scanned. Confirm it on the phone, then call login_status.",
-            "url": identity.get("url"),
+            "message": "The page says the QR was scanned. Confirm it on the phone, then call login_qr_wait again.",
+            "url": url,
         }
     return {
         "ok": False,
         "error_type": "timeout",
         "status": "timeout",
-        "message": "The QR was not confirmed before the timeout. Call login_qr_start if it expired.",
-        "url": identity.get("url"),
+        "message": "The QR was not confirmed before the timeout. If it is still on screen, call login_qr_wait again.",
+        "url": url,
     }
 
 

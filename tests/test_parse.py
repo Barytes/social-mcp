@@ -7,7 +7,7 @@ from bili_mcp.parse import (
     parse_bili_search,
     parse_bili_video,
 )
-from bili_mcp.urls import bili_search_url
+from bili_mcp.urls import LOGIN_URL, bili_search_url
 from xhs_mcp.parse import classify_xhs_search, parse_xhs_identity, parse_xhs_note, parse_xhs_search
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -17,8 +17,63 @@ def read(name: str) -> str:
     return (FIXTURES / name).read_text(encoding="utf-8")
 
 
+def test_text_fields_unescape_html_entities() -> None:
+    bili = """
+    <div class="bili-video-card">
+      <a href="https://www.bilibili.com/video/BV1ccccccccc/">
+        <h3 class="bili-video-card__info--tit" title="【ASCII动画】躲在超市后门抽烟的两人 OP&amp;amp;ED">【ASCII动画】躲在超市后门抽烟的两人 OP&amp;amp;ED</h3>
+        <span class="bili-video-card__info--author">甲&amp;amp;乙</span>
+        <span class="bili-video-card__stats--left"><span class="bili-video-card__stats--item">12.3万</span></span>
+      </a>
+    </div>
+    """
+    videos, _parser = parse_bili_search(bili)
+    assert videos[0]["title"] == "【ASCII动画】躲在超市后门抽烟的两人 OP&ED"
+    assert videos[0]["up_name"] == "甲&乙"
+    assert "&amp;" not in videos[0]["title"]
+    assert videos[0]["play_count"] == "12.3万"
+    video_html = """
+    <h1 class="video-title">OP&amp;amp;ED</h1>
+    <div class="desc-info-text">简介 &amp;amp; 说明</div>
+    <a class="up-name">UP&amp;amp;主</a>
+    <div class="video-tag-container"><a class="tag-link">标签&amp;amp;甲</a></div>
+    """
+    video = parse_bili_video(video_html, "BV1ccccccccc")
+    assert video is not None
+    assert video["title"] == "OP&ED"
+    assert video["up_name"] == "UP&主"
+    assert video["description"] == "简介 & 说明"
+    assert video["tags"] == ["标签&甲"]
+    xhs = """
+    <section class="note-item">
+      <a href="/explore/64f0abc123456789abcd1234?xsec_token=tok&amp;xsec_source=pc_search"></a>
+      <a class="title"><span>标题&amp;amp;甲</span></a>
+      <span class="name">作者&amp;amp;乙</span>
+      <span class="like-wrapper"><span class="count">1.2万</span></span>
+    </section>
+    """
+    notes, _parser = parse_xhs_search(xhs)
+    assert notes[0]["title"] == "标题&甲"
+    assert notes[0]["author"] == "作者&乙"
+    assert notes[0]["like_count"] == "1.2万"
+    assert "xsec_token=tok" in notes[0]["url"]
+    note_html = """
+    <div id="detail-title">详情&amp;amp;题</div>
+    <div id="detail-desc">正文&amp;amp;段</div>
+    <span class="username">名&amp;amp;字</span>
+    <a class="tag">#标签&amp;amp;丙</a>
+    """
+    note = parse_xhs_note(note_html, notes[0]["url"])
+    assert note is not None
+    assert note["title"] == "详情&题"
+    assert note["author"] == "名&字"
+    assert note["description"] == "正文&段"
+    assert note["tags"] == ["标签&丙"]
+
+
 def test_bili_search_url_encodes_keyword() -> None:
     assert bili_search_url("测试", 2) == "https://search.bilibili.com/all?keyword=%E6%B5%8B%E8%AF%95&page=2"
+    assert LOGIN_URL == "https://passport.bilibili.com/pc/passport/login"
 
 
 def test_bili_search_fixture() -> None:

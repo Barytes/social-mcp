@@ -4,7 +4,10 @@ from types import SimpleNamespace
 
 from bili_mcp.flow import search_videos
 from bili_mcp.policy import BiliPolicy
-from xhs_mcp.flow import search_notes
+from bili_mcp.urls import LOGIN_URL
+from mcp_browser.actions import goto_allowed
+from mcp_browser.errors import PageLoadFailed
+from xhs_mcp.flow import login_qr_wait, search_notes
 from xhs_mcp.policy import XhsPolicy
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -115,6 +118,92 @@ def test_xhs_login_wall_is_logged_out(tmp_path: Path) -> None:
     assert "网页" in payload["message"]
     assert page.scrolled == 0
     assert "/explore" not in page.gotos[0]
+
+
+class QrPage(FakePage):
+    def __init__(self) -> None:
+        super().__init__("<html><body>扫码</body></html>")
+        self.url = "https://www.xiaohongshu.com/login"
+        self.visible = "请使用小红书扫码 点击刷新"
+        self.show_qr = True
+
+    async def inner_text(self, _selector: str) -> str:
+        return self.visible
+
+    def locator(self, selector: str) -> FakeLocator:
+        page = self
+
+        class QrLocator(FakeLocator):
+            async def count(self) -> int:
+                if "qrcode-img" in selector and page.show_qr:
+                    return 1
+                return 0
+
+            async def bounding_box(self):
+                if "qrcode-img" in selector and page.show_qr:
+                    return {"width": 180, "height": 180}
+                return None
+
+        return QrLocator()
+
+
+def test_xhs_qr_wait_can_be_repeated_without_replacing_the_code(tmp_path: Path) -> None:
+    page = QrPage()
+    session = FakeSession(page, XhsPolicy(), tmp_path)
+    first = asyncio.run(login_qr_wait(session, 1))
+    second = asyncio.run(login_qr_wait(session, 1))
+    assert first["status"] == "qr_pending"
+    assert first["qr_still_valid"] is True
+    assert "login_qr_wait" in first["message"]
+    assert second["status"] == "qr_pending"
+    assert page.gotos == []
+
+
+def test_xhs_qr_wait_reports_expiry_without_opening_login(tmp_path: Path) -> None:
+    page = QrPage()
+    page.visible = "二维码已过期 点击刷新"
+    session = FakeSession(page, XhsPolicy(), tmp_path)
+    payload = asyncio.run(login_qr_wait(session, 30))
+    assert payload["error_type"] == "qr_expired"
+    assert payload["status"] == "qr_expired"
+    assert payload["qr_still_valid"] is False
+    assert "login_qr_start" in payload["message"]
+    assert page.gotos == []
+
+
+def test_login_page_download_and_http_error_are_page_load_failed() -> None:
+    class Page:
+        def __init__(self, status: int | None, download: bool) -> None:
+            self.url = "about:blank"
+            self.status = status
+            self.download = download
+
+        async def goto(self, url: str, **_kwargs):
+            self.url = url
+            if url == "about:blank":
+                return SimpleNamespace(status=200)
+            if self.download:
+                raise RuntimeError("Download is starting")
+            return SimpleNamespace(status=self.status)
+
+    download = Page(status=None, download=True)
+    try:
+        asyncio.run(goto_allowed(download, LOGIN_URL, BiliPolicy()))
+    except PageLoadFailed as exc:
+        assert "did not load as a document" in exc.message
+        assert LOGIN_URL in exc.message
+        assert exc.error_type == "page_load_failed"
+    else:
+        raise AssertionError("download navigation should fail the page load")
+
+    missing = Page(status=404, download=False)
+    try:
+        asyncio.run(goto_allowed(missing, LOGIN_URL, BiliPolicy()))
+    except PageLoadFailed as exc:
+        assert "HTTP 404" in exc.message
+        assert exc.extra["http_status"] == 404
+    else:
+        raise AssertionError("HTTP 404 should fail the page load")
 
 
 def test_xhs_risk_page_stops(tmp_path: Path) -> None:
