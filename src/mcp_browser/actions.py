@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from mcp_browser.errors import FeedBlocked, NavigationDenied, PageLoadFailed, SiteError
 from mcp_browser.guard import ClickPurpose, ClickTarget, FillPurpose, assert_click_allowed, assert_fill_allowed
@@ -69,6 +72,60 @@ async def safe_fill(locator: Any, value: str, purpose: FillPurpose) -> None:
     await locator.fill(value, timeout=5000)
 
 
+def _navigation_aborted(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "err_aborted" in text or "interrupted by another navigation" in text
+
+
+def _hostname(url: str) -> str:
+    return (urlsplit(url).hostname or "").lower()
+
+
+def _aborted_landing_ok(requested: str, landed: str, policy: DocumentPolicy) -> bool:
+    """A client redirect may change the query, or move account home onto the passport document."""
+    if policy.classify(landed) != ALLOW:
+        return False
+    landed_host = _hostname(landed)
+    requested_host = _hostname(requested)
+    if not landed_host:
+        return False
+    if landed_host == requested_host:
+        return True
+    return landed_host == "passport.bilibili.com" and requested_host.endswith("bilibili.com")
+
+
+async def _url_after_abort(page: Any, timeout_s: float = 8) -> str:
+    """Wait until a redirect that aborted `goto` has a stable document URL.
+
+    `page.wait_for_timeout` itself throws while that navigation is still being
+    replaced, so the wait uses asyncio. The page is left in place.
+    """
+    deadline = time.monotonic() + timeout_s
+    last = ""
+    stable = 0
+    while time.monotonic() < deadline:
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=1000)
+        except Exception:
+            pass
+        try:
+            current = page.url or ""
+        except Exception:
+            current = ""
+        usable = current not in {"", "about:blank"} and not current.startswith("chrome-error:")
+        if usable and current == last:
+            stable += 1
+            if stable >= 2:
+                return current
+        else:
+            stable = 0
+        last = current
+        await asyncio.sleep(0.25)
+    if last in {"", "about:blank"} or last.startswith("chrome-error:"):
+        return ""
+    return last
+
+
 async def _blank(page: Any) -> None:
     try:
         await page.goto("about:blank", wait_until="domcontentloaded", timeout=5000)
@@ -98,14 +155,32 @@ async def goto_allowed(
         response = await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
     except Exception as exc:
         blocked = getattr(session, "last_blocked_url", None) if session is not None else None
-        await _blank(page)
         if blocked and policy.classify(blocked) == FEED:
+            await _blank(page)
             raise FeedBlocked(
                 "The page redirected to a home or recommendation feed. No feed content was read.",
                 url=blocked,
             ) from exc
         if blocked:
+            await _blank(page)
             raise NavigationDenied("Navigation left the allowlist.", url=blocked) from exc
+        # passport.bilibili.com/pc/passport/login replaces itself with ?site=OVERSEAS&lang=...
+        # Chrome aborts the first navigation. The document that remains is the login page.
+        if _navigation_aborted(exc):
+            final = await _url_after_abort(page)
+            decision = policy.classify(final)
+            if decision == FEED:
+                await _blank(page)
+                raise FeedBlocked(
+                    "The page redirected to a home or recommendation feed. No feed content was read.",
+                    url=final,
+                ) from exc
+            if _aborted_landing_ok(url, final, policy):
+                log.info("navigation aborted by a same-site redirect; using the settled document")
+                return final
+            await _blank(page)
+            raise PageLoadFailed(page_load_message(exc, final or url), url=final or url) from exc
+        await _blank(page)
         raise PageLoadFailed(page_load_message(exc, url), url=url) from exc
     final = page.url
     final_decision = policy.classify(final)

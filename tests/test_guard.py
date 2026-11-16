@@ -37,6 +37,14 @@ def test_login_submit_labels(label: str) -> None:
     assert_click_allowed(ClickPurpose.SUBMIT_LOGIN, target(text=label))
 
 
+def test_english_password_login_button_is_not_ours_to_press() -> None:
+    """The headed overseas page shows Login next to the password fields. A person presses it."""
+    with pytest.raises(ReadOnlyViolation):
+        assert_click_allowed(ClickPurpose.SUBMIT_LOGIN, target(text="Login"))
+    with pytest.raises(ReadOnlyViolation):
+        assert_fill_allowed(FillPurpose.PHONE, target(placeholder="Please enter password", input_type="password"))
+
+
 def test_request_code_and_terms() -> None:
     assert_click_allowed(ClickPurpose.REQUEST_SMS_CODE, target(text="获取验证码"))
     assert_click_allowed(ClickPurpose.ACCEPT_LOGIN_TERMS, target(input_type="checkbox"))

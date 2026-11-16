@@ -40,6 +40,8 @@ def build_server(session) -> MCPServer:
     async def login_qr_start() -> str | list[str | Image]:
         """在官方登录页截取二维码，返回 PNG 绝对路径，并附上图片内容。
 
+        二维码画在 .login-scan__qrcode 里的 canvas 上，可能比 DOMContentLoaded 晚几秒。
+        zh-Hans 和 en 都是这一块。不点击密码登录或短信登录，有界面窗口里这两块表单留给人自己用。
         用手机相册或另一块屏幕扫码。不要把二维码写进仓库。
         """
         payload = await flow.login_qr_start(session)

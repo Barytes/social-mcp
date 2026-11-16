@@ -17,7 +17,12 @@ bili-mcp-smoke = "bili_mcp.smoke:main"
 xhs-mcp-smoke = "xhs_mcp.smoke:main"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = [
+    "pillow>=13.0.0",
+    "pytest>=8",
+    "pyzbar>=0.1.9",
+    "segno>=1.6.6",
+]
 
 [build-system]
 requires = ["hatchling"]

@@ -82,7 +82,8 @@ uv run xhs-mcp
 
 1. **扫码（优先）**  
    `login_qr_start` 打开官方登录页，把二维码截成 PNG，返回绝对路径，并作为 MCP 图片内容返回。用手机相册或另一块屏幕扫。  
-   B 站用 App 扫。小红书页面写的是小红书或微信。  
+   B 站用 App 扫。登录页会自己跳到 `?site=OVERSEAS&lang=zh-Hans` 或 `lang=en`，这次跳转会让第一次 `goto` 变成 `net::ERR_ABORTED`；只要最后还停在 `passport.bilibili.com` 上并且文档加载了，就当作打开成功，不报 `page_load_failed`。二维码画在 `.login-scan__qrcode` 里的 `canvas`（旁边可能还有一个没有 class 的 `img`），会比 DOMContentLoaded 晚几秒，截的是这块 canvas。语言参数不影响选择器。不点击「密码登录 / Password login」或「登录 / Login」，有界面窗口里账号、密码和短信表单留给人自己填。  
+   小红书页面写的是小红书或微信。  
    `login_qr_wait`（默认 90 秒，单次最长 180 秒）在当前页等到：已登录、二维码过期、需要人处理，或这一轮时间用完。等待期间这个浏览器被占用。  
    同一张二维码在过期前可以反复调用 `login_qr_wait`。它不会重新打开登录页，所以不会把正在扫的码换掉。还没扫完时返回 `qr_pending`，`qr_still_valid` 为 true。页面显示出过期时返回 `qr_expired`，这时才重新 `login_qr_start`。冒烟命令的 `--wait` 仍然最长 180 秒。
 2. **短信**  
@@ -151,7 +152,7 @@ uv run pytest
 看过并且写进选择器的：
 
 - B 站搜索页卡片：`.bili-video-card`、标题、BV 链接、UP 主、播放文案、时长、日期、`button.vui_pagenation--btn-side`（「下一页」）。`page=2` 会换一批结果，地址会变成 `/zh-Hans/all`。
-- B 站未登录时，`account.bilibili.com/account/home` 会跳到 `passport.bilibili.com/login?gourl=...&site=OVERSEAS`。直接打开 `https://passport.bilibili.com/pc/passport/login` 返回 HTTP 200，并落到同一套海外登录页（地址栏带 `site=OVERSEAS`）。左侧仍是 `.login-scan__qrcode img`。点「短信登录」之后是 `input[placeholder=请输入手机号]`、「获取验证码」、`input[placeholder=请输入验证码]`、「登录/注册」。这次核对没有提交短信，也没有扫码。裸的 `/login` 用 HEAD 请求是 HTTP 404；目标机器上 Playwright 打开它会报 `Download is starting`。
+- B 站未登录时，`account.bilibili.com/account/home` 会跳到 `passport.bilibili.com`。无头打开 `https://passport.bilibili.com/pc/passport/login` 时，第一次导航会被客户端跳转到 `?site=OVERSEAS&lang=zh-Hans` 打断（`net::ERR_ABORTED`）；等地址稳定后就是登录页。这台机器上可见的码是 `.login-scan__qrcode img`（alt 为 Scan me!，约 140px），同级 `canvas` 在 DOM 里但布局尺寸是 0。目标机器的有界面页面则是 canvas 有尺寸、img 没有 class。两种都截有尺寸的那一个，优先 canvas。截图放大后能解成一条 https 二维码；内容没有记下来，也没有拿去扫码登录。英文界面还有 Password login 和 SMS Login，工具不点 Login、不填密码。裸的 `/login` 在目标机器上会 HTTP 404，Chrome 把它当成下载。
 - B 站搜索页未登录头部有 `.header-avatar-unlogin-entry`。
 - B 站视频页：`h1.video-title`、`.desc-info-text`、`a.up-name`、`.video-tag-container a.tag-link`。页面会先闪一下「出错啦」再出来，所以详情会多等几秒。发布日期选择器没有在真站上对上，可能是空的。
 - 小红书有界面登录页：`img.qrcode-img`、`input[placeholder=输入手机号]`、`input[placeholder=输入验证码]`、`获取验证码`、`button.submit`「登录」。

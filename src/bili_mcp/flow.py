@@ -205,25 +205,28 @@ async def login_qr_start(session) -> dict:
             payload = _logged_in(identity)
             payload["status"] = "already_logged_in"
             return payload
-        await goto_allowed(page, LOGIN_URL, session.policy, session)
-        try:
-            await page.wait_for_selector(".login-scan__qrcode img, .login-scan__qrcode", timeout=10000)
-        except Exception:
-            pass
+        # Account home often redirects here already. Opening the login URL again
+        # aborts the document that is painting the QR.
+        if "passport.bilibili.com" not in (page.url or ""):
+            await goto_allowed(page, LOGIN_URL, session.policy, session)
         await _ensure_no_challenge(page, session)
+        # Do not click Password login, Login, or SMS Login. Those controls stay on the
+        # page so a person can use them in the headed window. Language (zh-Hans or en) is ignored.
         saved = await _capture_qr(page, session.config.qr_path)
         if not saved:
             raise LoginUiNotFound(
-                "The official login page did not show a QR image. Selectors were checked on "
-                "https://passport.bilibili.com/pc/passport/login (overseas layout, site=OVERSEAS). "
-                "A domestic layout may differ.",
+                "The official login page did not show a QR canvas inside .login-scan__qrcode. "
+                "The code is drawn a few seconds after the document loads; lang=zh-Hans and lang=en use the same box.",
                 url=page.url,
-                selectors_tried=[".login-scan__qrcode img", ".login-scan__qrcode"],
+                selectors_tried=[".login-scan__qrcode canvas", ".login-scan__qrcode img", ".login-scan__qrcode"],
             )
         return {
             "ok": True,
             "status": "qr_ready",
-            "message": "Scan this QR with the Bilibili mobile app. The PNG is outside the repo.",
+            "message": (
+                "Scan this QR with the Bilibili mobile app. The PNG is the canvas inside the QR box, outside the repo. "
+                "Password login and SMS Login stay on the page; this tool does not type a password."
+            ),
             "qr_path": str(session.config.qr_path),
             "url": page.url,
             "_image_path": str(session.config.qr_path),
@@ -238,32 +241,71 @@ async def login_qr_start(session) -> dict:
         return {"ok": False, "error_type": "internal_error", "status": "internal_error", "message": redact(str(exc))[:300]}
 
 
+_QR_CANVAS = ".login-scan__qrcode canvas"
+_QR_IMG = ".login-scan__qrcode img"
+_QR_BOX = ".login-scan__qrcode"
+
+
+async def _sized(page, selector: str, minimum: float = 80):
+    locator = page.locator(selector).first
+    try:
+        if await locator.count() == 0:
+            return None
+        box = await locator.bounding_box()
+    except Exception:
+        return None
+    if not box or box.get("width", 0) < minimum or box.get("height", 0) < minimum:
+        return None
+    return locator
+
+
+async def _current_qr(page, *, allow_container: bool):
+    """Prefer the canvas that actually paints the code, then a real image, then the box."""
+    for selector in (_QR_CANVAS, _QR_IMG):
+        found = await _sized(page, selector)
+        if found is not None:
+            return found
+    if allow_container:
+        return await _sized(page, _QR_BOX)
+    return None
+
+
 async def _capture_qr(page, dest) -> bool:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    for selector in (".login-scan__qrcode img", ".login-scan__qrcode"):
-        locator = page.locator(selector).first
-        try:
-            if await locator.count() == 0:
-                continue
-            box = await locator.bounding_box()
-            if not box or box.get("width", 0) < 80 or box.get("height", 0) < 80:
-                continue
-            await locator.screenshot(path=str(dest))
-            return True
-        except Exception:
-            continue
-    return False
+    deadline = time.monotonic() + 15
+    target = None
+    while time.monotonic() < deadline:
+        target = await _current_qr(page, allow_container=False)
+        if target is not None:
+            break
+        await page.wait_for_timeout(400)
+    if target is None:
+        target = await _current_qr(page, allow_container=True)
+    if target is None:
+        return False
+    # The bitmap is painted just after the element gets a size.
+    try:
+        await page.wait_for_timeout(400)
+    except Exception:
+        pass
+    refreshed = await _current_qr(page, allow_container=False)
+    if refreshed is not None:
+        target = refreshed
+    try:
+        await target.screenshot(path=str(dest))
+    except Exception:
+        log.info("qr screenshot failed")
+        return False
+    try:
+        return dest.is_file() and dest.stat().st_size > 32
+    except OSError:
+        return False
 
 
 async def _qr_visible(page) -> bool:
-    locator = page.locator(".login-scan__qrcode img").first
-    try:
-        if await locator.count() == 0:
-            return False
-        box = await locator.bounding_box()
-    except Exception:
-        return False
-    return bool(box and box.get("width", 0) >= 80 and box.get("height", 0) >= 80)
+    if await _current_qr(page, allow_container=False) is not None:
+        return True
+    return await _current_qr(page, allow_container=True) is not None
 
 
 async def _qr_text(page) -> str:
