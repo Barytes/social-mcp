@@ -1,0 +1,25 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+.env
+.env.*
+!.env.example
+
+# Browser profiles, QR codes, screenshots and logs stay outside the repo.
+# These names are ignored anyway in case a path is copied in by mistake.
+profile/
+screenshots/
+qr/
+*.log
+login-qr.png
+
+.DS_Store
