@@ -174,7 +174,8 @@ async def list_favorite_folders(session) -> dict:
 async def _open_folder(page, session, uid: str, fid: str | None, sort: str | None, query: str | None) -> bool:
     await goto_allowed(page, bili_favlist_url(uid, fid), session.policy, session)
     try:
-        await page.wait_for_selector(".favlist-main, .bili-video-card", timeout=12000)
+        # .favlist-main renders about a second before its cards; wait for the cards themselves.
+        await page.wait_for_selector(".favlist-main .bili-video-card", timeout=12000)
     except Exception:
         pass
     await _ensure_no_challenge(page, session)
@@ -190,8 +191,10 @@ async def _open_folder(page, session, uid: str, fid: str | None, sort: str | Non
         try:
             if await field.count():
                 await safe_fill(field, query, FillPurpose.LIST_FILTER)
+                # The box only filters after Enter; filling alone leaves the full page in place.
+                await field.press("Enter")
                 used = True
-                await page.wait_for_timeout(800)
+                await page.wait_for_timeout(2000)
         except Exception:
             log.info("folder search box was not used")
     return used
@@ -392,16 +395,17 @@ async def _collect_watch_later(page, session, want: int) -> tuple[dict, bool]:
         else:
             stagnant = 0
             last = count
-        locator = page.locator(".action-list-body").first
+        # The scrolling element is .action-list (overflow-y: auto); .action-list-body does not scroll.
+        locator = page.locator(".action-list-item-wrap").last
         try:
             if await locator.count():
-                await locator.evaluate("el => { el.scrollTop = el.scrollHeight; }")
+                await locator.scroll_into_view_if_needed()
             else:
                 await page.mouse.wheel(0, 1400)
         except Exception:
             break
         try:
-            await page.wait_for_timeout(700)
+            await page.wait_for_timeout(1500)
         except Exception:
             break
         await silence_media(page)
