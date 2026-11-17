@@ -56,6 +56,8 @@ def build_server(session) -> MCPServer:
         """在当前登录页上等扫码完成、过期，或出现需要人处理的验证。
 
         timeout_s 为 1 到 180 秒。同一张二维码在过期前可以反复调用本工具，不会重新打开登录页。
+        手机已扫但还没点确认时，这次调用会继续等到超时，而不是马上返回。
+        确认后官网会打开 passport 的 crossDomain，再跳到首页。首页仍会被拦住；这时改打开账号页确认登录。
         还没扫完时返回 qr_pending（qr_still_valid 为 true）。二维码过期时返回 qr_expired，这时才重新 login_qr_start。
         登录页打不开时返回 page_load_failed，而不是一段浏览器下载错误。
         """

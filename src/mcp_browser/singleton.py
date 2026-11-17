@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+import json
 import re
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
 from mcp_browser.errors import ProfileInUse
 
 _LOCK_NAMES = ("SingletonLock", "SingletonCookie", "SingletonSocket")
+# Tab restore files. Cookies and Login Data are not in this list.
+_SESSION_FILES = (
+    "Current Session",
+    "Current Tabs",
+    "Last Session",
+    "Last Tabs",
+)
 _ZOMBIE = re.compile(r"\)\s+Z\b")
 
 
@@ -57,6 +66,42 @@ def _remove_lock_file(path: Path) -> None:
         )
 
 
+def clear_restored_sessions(profile: Path) -> None:
+    """Drop restored tabs before Chrome starts. Never touches Cookies or Login Data."""
+    default = profile / "Default"
+    sessions = default / "Sessions"
+    if sessions.is_dir() and not sessions.is_symlink():
+        shutil.rmtree(sessions)
+    elif sessions.is_symlink():
+        sessions.unlink()
+    for name in _SESSION_FILES:
+        path = default / name
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+    prefs_path = default / "Preferences"
+    if not prefs_path.is_file():
+        return
+    try:
+        data = json.loads(prefs_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(data, dict):
+        return
+    session = data.get("session")
+    if not isinstance(session, dict):
+        session = {}
+        data["session"] = session
+    session["restore_on_startup"] = 5
+    session.pop("startup_urls", None)
+    profile_prefs = data.get("profile")
+    if not isinstance(profile_prefs, dict):
+        profile_prefs = {}
+        data["profile"] = profile_prefs
+    profile_prefs["exit_type"] = "Normal"
+    profile_prefs["exited_cleanly"] = True
+    prefs_path.write_text(json.dumps(data), encoding="utf-8")
+
+
 def prepare_profile(
     profile: Path,
     *,
@@ -74,3 +119,4 @@ def prepare_profile(
         )
     for name in _LOCK_NAMES:
         _remove_lock_file(profile / name)
+    clear_restored_sessions(profile)

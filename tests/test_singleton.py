@@ -32,6 +32,30 @@ def test_live_chrome_keeps_the_lock(tmp_path: Path) -> None:
     assert (profile / "SingletonLock").is_symlink()
 
 
+def test_startup_drops_restored_tabs_and_keeps_cookies(tmp_path: Path) -> None:
+    from mcp_browser.singleton import clear_restored_sessions
+
+    profile = tmp_path / "profile"
+    default = profile / "Default"
+    (default / "Sessions").mkdir(parents=True)
+    (default / "Sessions" / "Tabs_1").write_text("old-tabs", encoding="utf-8")
+    (default / "Current Session").write_text("old", encoding="utf-8")
+    (default / "Network").mkdir()
+    (default / "Network" / "Cookies").write_text("cookie-jar", encoding="utf-8")
+    (default / "Preferences").write_text(
+        '{"session": {"restore_on_startup": 1, "startup_urls": ["https://www.bilibili.com/"]}, "kept": true}',
+        encoding="utf-8",
+    )
+    clear_restored_sessions(profile)
+    assert not (default / "Sessions").exists()
+    assert not (default / "Current Session").exists()
+    assert (default / "Network" / "Cookies").read_text(encoding="utf-8") == "cookie-jar"
+    prefs = __import__("json").loads((default / "Preferences").read_text(encoding="utf-8"))
+    assert prefs["kept"] is True
+    assert prefs["session"]["restore_on_startup"] == 5
+    assert "startup_urls" not in prefs["session"]
+
+
 def test_profile_inside_a_repo_is_refused(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)

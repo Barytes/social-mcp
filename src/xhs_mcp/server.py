@@ -52,10 +52,10 @@ def build_server(session) -> MCPServer:
 
     @server.tool(annotations=READ, structured_output=False)
     async def login_qr_wait(timeout_s: float = 90) -> str:
-        """在当前登录页上等扫码完成、过期，或出现需要人处理的验证。
+        """在当前登录页上等扫码完成、过期、短信二次验证，或出现需要人处理的验证。
 
-        timeout_s 为 1–180。同一张二维码在过期前可以反复调用本工具，不会重新打开登录页，因此不会把正在扫的码换掉。
-        还没扫完时返回 qr_pending（qr_still_valid 为 true）。页面显示过期时返回 qr_expired，这时才重新 login_qr_start。
+        timeout_s 为 1–180。同一张二维码在过期前可以反复调用。手机已扫但还没确认时，这次调用会继续等到超时，而不是马上返回。
+        新设备弹出「短信验证码验证」时返回 sms_verification_required 和页面上已经打码的手机号。把验证码交给 login_sms_submit，不要自动重发。
         """
         return dumps(await flow.login_qr_wait(session, timeout_s))
 
@@ -66,7 +66,11 @@ def build_server(session) -> MCPServer:
 
     @server.tool(annotations=LOGIN, structured_output=False)
     async def login_sms_submit(code: str) -> str:
-        """提交短信验证码。code 不会写入日志或回显。"""
+        """提交短信验证码。code 不会写入日志或回显。
+
+        扫码之后的新设备弹窗用页面上的「验证」按钮。不会点击「重新发送」。
+        验证成功后网站会跳到首页推荐，这个跳转会被拦住，然后改到非推荐页确认登录。
+        """
         return dumps(await flow.login_sms_submit(session, code))
 
     @server.tool(annotations=READ, structured_output=False)

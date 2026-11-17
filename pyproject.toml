@@ -15,6 +15,7 @@ bili-mcp = "bili_mcp.cli:main"
 xhs-mcp = "xhs_mcp.cli:main"
 bili-mcp-smoke = "bili_mcp.smoke:main"
 xhs-mcp-smoke = "xhs_mcp.smoke:main"
+xhs-mcp-xvfb = "xhs_mcp.xvfb:main"
 
 [dependency-groups]
 dev = [

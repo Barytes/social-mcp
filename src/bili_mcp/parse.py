@@ -126,7 +126,8 @@ def parse_bili_video(html: str, bvid: str) -> dict | None:
 def parse_bili_identity(html: str, url: str) -> dict:
     """Logged-out detection uses the passport redirect and the unlogin header, both seen live.
 
-    Nickname selectors on the account page were not confirmed against a logged-in session.
+    The logged-in nickname on account.bilibili.com/account/home is span.home-top-msg-name
+    (seen 2026-11-17). Older class names stay as fallbacks.
     """
     if "passport.bilibili.com" in url:
         return {"logged_in": False, "nickname": None, "uid": None}
@@ -134,7 +135,15 @@ def parse_bili_identity(html: str, url: str) -> dict:
     if soup.select_one(".header-avatar-unlogin-entry"):
         return {"logged_in": False, "nickname": None, "uid": None}
     nickname = None
-    for selector in (".home-name", ".nickname", ".user-name", "#h-name", ".header-uname"):
+    for selector in (
+        "span.home-top-msg-name",
+        ".home-top-msg-name",
+        ".home-name",
+        ".nickname",
+        ".user-name",
+        "#h-name",
+        ".header-uname",
+    ):
         element = soup.select_one(selector)
         if element is None:
             continue

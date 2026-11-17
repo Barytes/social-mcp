@@ -155,6 +155,26 @@ def parse_xhs_note(html: str, url: str) -> dict | None:
     }
 
 
+def parse_xhs_profile_name(html: str) -> str | None:
+    """Nickname on the user's own /user/profile/{uid} page. The feed is not used."""
+    soup = BeautifulSoup(html, "html.parser")
+    for selector in (".user-nickname", ".user-name", ".user-info .name", "span.user-name"):
+        element = soup.select_one(selector)
+        if element is None:
+            continue
+        value = _clean(element.get_text(" ", strip=True))
+        if value and value not in {"登录", "我", "小红书"}:
+            return value
+    if soup.title is not None:
+        title = _clean(soup.title.get_text(" ", strip=True)) or ""
+        for suffix in (" - 小红书", "- 小红书"):
+            if title.endswith(suffix):
+                name = title[: -len(suffix)].strip()
+                if name and name not in {"小红书", "个人主页"}:
+                    return name
+    return None
+
+
 def parse_xhs_identity(html: str, url: str, text: str) -> dict:
     """Login-form and login-wall detection were seen live. A logged-in nickname was not."""
     if "登录后查看搜索结果" in text or "passport" in url:

@@ -18,6 +18,11 @@ def test_bilibili_feed_and_allowed_pages() -> None:
     assert policy.classify("https://account.bilibili.com/account/home") == ALLOW
     assert policy.classify("https://space.bilibili.com/123/favlist") == ALLOW
     assert policy.classify("https://www.bilibili.com/watchlater") == ALLOW
+    assert policy.classify("https://passport.biligame.com/x/passport-login/web/crossDomain?x=1") == ALLOW
+    assert policy.classify("https://passport.bigfunapp.cn/x/passport-login/web/crossDomain") == ALLOW
+    assert policy.classify("https://passport.bilibili.cn/x/passport-login/web/crossDomain") == ALLOW
+    assert policy.classify("https://passport.biligame.com/x/passport-login/web/other") == DENY
+    assert policy.classify("https://passport.biligame.com/") == DENY
     assert policy.classify("https://t.bilibili.com/") == DENY
     assert policy.classify("about:blank") == ALLOW
 

@@ -30,6 +30,7 @@ from mcp_browser.qr import expired_error, not_ready_payload, pending_payload, te
 from mcp_browser.redact import redact
 
 from bili_mcp.parse import classify_bili_search, parse_bili_identity, parse_bili_video
+from bili_mcp.policy import SSO_HOSTS, SSO_PATH
 from bili_mcp.urls import ACCOUNT_URL, LOGIN_URL, bili_search_url, bili_video_url
 
 log = logging.getLogger(__name__)
@@ -174,7 +175,7 @@ def _logged_in(identity: dict) -> dict:
         "nickname": identity.get("nickname"),
         "uid": identity.get("uid"),
         "url": identity.get("url"),
-        "nickname_selector_verified_live": False,
+        "nickname_selector_verified_live": True,
     }
 
 
@@ -323,6 +324,22 @@ async def _qr_text(page) -> str:
     return "\n".join(parts)
 
 
+def _sso_then_feed(session) -> bool:
+    """True when the official cross-domain hop was allowed and the home feed was then blocked."""
+    from urllib.parse import urlsplit
+
+    blocked = getattr(session, "last_blocked_url", None) or ""
+    allowed = getattr(session, "last_allowed_document", None) or ""
+    if session.policy.classify(blocked) != "feed":
+        return False
+    parts = urlsplit(allowed)
+    host = (parts.hostname or "").lower()
+    path = parts.path or ""
+    if path != "/" and path.endswith("/"):
+        path = path.rstrip("/") or "/"
+    return host in SSO_HOSTS and path == SSO_PATH
+
+
 async def login_qr_wait(session, timeout_s: float = 90) -> dict:
     if not isinstance(timeout_s, (int, float)) or isinstance(timeout_s, bool) or not 1 <= float(timeout_s) <= 180:
         return InvalidArgument("timeout_s must be between 1 and 180.").payload()
@@ -330,28 +347,44 @@ async def login_qr_wait(session, timeout_s: float = 90) -> dict:
 
     async def op(page):
         # Stay on the current document. Opening the login URL again would replace the QR.
+        # "Confirm on the phone" is not a terminal state: keep waiting until the session
+        # lands, the code expires, or this call's own timeout runs out.
         if text_says_expired(await _qr_text(page)):
             raise expired_error(page.url)
-        if not await _qr_visible(page):
-            if "passport.bilibili.com" not in (page.url or ""):
-                return await _read_identity(page, session)
-            return {"pending": "qr_not_ready", "url": page.url}
         deadline = time.monotonic() + timeout_s
+        saw_confirm = False
         while time.monotonic() < deadline:
             await _ensure_no_challenge(page, session)
+            if _sso_then_feed(session):
+                identity = await _read_identity(page, session)
+                if identity.get("logged_in") is True:
+                    return identity
             scan_text = await _qr_text(page)
             if text_says_expired(scan_text):
                 raise expired_error(page.url)
-            if not await _qr_visible(page):
-                if "passport.bilibili.com" not in (page.url or ""):
-                    return await _read_identity(page, session)
-                return {"pending": "qr_not_ready", "url": page.url}
             if any(phrase in scan_text for phrase in _QR_CONFIRM):
-                return {"logged_in": None, "pending": "awaiting_confirmation", "url": page.url}
+                saw_confirm = True
+            elif not await _qr_visible(page) and "passport.bilibili.com" not in (page.url or ""):
+                if _sso_then_feed(session):
+                    identity = await _read_identity(page, session)
+                    if identity.get("logged_in") is True:
+                        return identity
+                else:
+                    identity = await _read_identity(page, session)
+                    if identity.get("logged_in") is True or identity.get("logged_in") is False:
+                        return identity
             await page.wait_for_timeout(2000)
+        if _sso_then_feed(session):
+            return await _read_identity(page, session)
         if text_says_expired(await _qr_text(page)):
             raise expired_error(page.url)
-        return {"logged_in": None, "pending": "qr_pending", "url": page.url}
+        if saw_confirm:
+            return {"logged_in": None, "pending": "awaiting_confirmation", "url": page.url}
+        if await _qr_visible(page):
+            return {"logged_in": None, "pending": "qr_pending", "url": page.url}
+        if "passport.bilibili.com" not in (page.url or ""):
+            return await _read_identity(page, session)
+        return {"logged_in": None, "pending": "qr_not_ready", "url": page.url}
 
     try:
         identity = await session.call("login_qr_wait", op)
@@ -505,9 +538,14 @@ async def search_videos(session, keyword: str, limit: int = 10, page: int = 1) -
     async def op(browser_page):
         final = await goto_allowed(browser_page, url, session.policy, session)
         try:
-            await browser_page.wait_for_selector(".bili-video-card__info--tit, .search-page", timeout=15000)
+            # .search-page renders before the result cards on the logged-in layout.
+            await browser_page.wait_for_selector(".bili-video-card__info--tit", timeout=12000)
         except Exception:
-            pass
+            try:
+                await browser_page.wait_for_selector(".search-page", timeout=3000)
+                await browser_page.wait_for_timeout(1500)
+            except Exception:
+                pass
         await _ensure_no_challenge(browser_page, session)
         html = await browser_page.content()
         body = await _body_text(browser_page)

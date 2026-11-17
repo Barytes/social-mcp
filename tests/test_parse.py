@@ -72,7 +72,9 @@ def test_text_fields_unescape_html_entities() -> None:
 
 
 def test_bili_search_url_encodes_keyword() -> None:
-    assert bili_search_url("测试", 2) == "https://search.bilibili.com/all?keyword=%E6%B5%8B%E8%AF%95&page=2"
+    assert bili_search_url("测试", 1) == "https://search.bilibili.com/all?keyword=%E6%B5%8B%E8%AF%95"
+    assert bili_search_url("测试", 2) == "https://search.bilibili.com/all?keyword=%E6%B5%8B%E8%AF%95&page=2&o=30"
+    assert bili_search_url("测试", 3) == "https://search.bilibili.com/all?keyword=%E6%B5%8B%E8%AF%95&page=3&o=60"
     assert LOGIN_URL == "https://passport.bilibili.com/pc/passport/login"
 
 

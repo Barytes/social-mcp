@@ -45,6 +45,7 @@ class FakePage:
         self.html = html
         self.url = "about:blank"
         self.gotos: list[str] = []
+        self.selectors: list[str] = []
         self.scrolled = 0
         self.mouse = SimpleNamespace(wheel=self._wheel)
 
@@ -67,7 +68,8 @@ class FakePage:
 
         return BeautifulSoup(self.html, "html.parser").get_text("\n", strip=True)
 
-    async def wait_for_selector(self, _selector: str, timeout: int | None = None) -> None:
+    async def wait_for_selector(self, selector: str, timeout: int | None = None) -> None:
+        self.selectors.append(selector)
         return None
 
     async def wait_for_timeout(self, _ms: int) -> None:
@@ -104,6 +106,8 @@ def test_bili_search_flow_reads_cards_without_clicking(tmp_path: Path) -> None:
     assert payload["has_more"] is True
     assert "keyword=%E6%B5%8B%E8%AF%95" in page.gotos[0]
     assert "page=2" in page.gotos[0]
+    assert "o=30" in page.gotos[0]
+    assert page.selectors[0] == ".bili-video-card__info--tit"
     assert page.scrolled == 0
 
 

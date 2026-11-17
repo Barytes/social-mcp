@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
+from urllib.parse import urlsplit
 
 from mcp_browser.config import SiteConfig
 from mcp_browser.errors import BrowserFailed, SiteError
@@ -30,6 +31,34 @@ _CLOSED_MARKERS = (
     "connection closed",
     "browser has disconnected",
 )
+
+
+def document_log_target(url: str) -> tuple[str, str]:
+    """Host and path only. Query strings can carry xsec_token and must not be logged."""
+    parts = urlsplit(url or "")
+    return parts.hostname or "", parts.path or ""
+
+
+async def keep_one_page(context, policy: DocumentPolicy):
+    """Drop restored tabs. If the one that remains is a feed, leave it for about:blank."""
+    pages = list(context.pages)
+    for extra in pages[1:]:
+        try:
+            await extra.close()
+        except Exception:
+            log.info("could not close a restored tab")
+    remaining = list(context.pages)
+    page = remaining[0] if remaining else await context.new_page()
+    try:
+        current = page.url or ""
+    except Exception:
+        current = ""
+    if current and policy.classify(current) != ALLOW:
+        try:
+            await page.goto("about:blank", wait_until="domcontentloaded", timeout=5000)
+        except Exception:
+            log.info("could not leave a restored tab")
+    return page
 
 
 def is_browser_closed(exc: BaseException) -> bool:
@@ -116,6 +145,7 @@ class BrowserSession:
         self.config = config
         self.policy = policy
         self.last_blocked_url: str | None = None
+        self.last_allowed_document: str | None = None
         self._lock = None  # created lazily so importing this module does not require a running loop
         self._playwright = None
         self._context = None
@@ -188,14 +218,15 @@ class BrowserSession:
                     "--no-default-browser-check",
                     "--disable-sync",
                     "--disable-features=Translate",
+                    "--disable-session-crashed-bubble",
+                    "--hide-crash-restore-bubble",
                 ],
                 timeout=60_000,
             )
             self._context.set_default_navigation_timeout(30_000)
             self._context.set_default_timeout(15_000)
             await self._context.route("**/*", self._route)
-            pages = self._context.pages
-            self._page = pages[0] if pages else await self._context.new_page()
+            self._page = await keep_one_page(self._context, self.policy)
         except Exception as exc:
             await self._dispose()
             message = str(exc)
@@ -219,11 +250,18 @@ class BrowserSession:
         if blocked:
             try:
                 self.last_blocked_url = request.url
+                host, path = document_log_target(request.url)
             except Exception:
                 self.last_blocked_url = None
-            log.warning("blocked document navigation")
+                host, path = "", ""
+            log.warning("blocked document navigation host=%s path=%s", host, path)
             await route.abort()
             return
+        try:
+            if is_main_document(request):
+                self.last_allowed_document = request.url
+        except Exception:
+            pass
         await route.continue_()
 
     async def _dispose(self) -> None:

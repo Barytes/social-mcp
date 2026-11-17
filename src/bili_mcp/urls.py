@@ -9,8 +9,13 @@ WATCH_LATER_URL = "https://www.bilibili.com/watchlater"
 
 
 def bili_search_url(keyword: str, page: int) -> str:
-    query = urlencode({"keyword": keyword, "page": page})
-    return f"https://search.bilibili.com/all?{query}"
+    # A bare &page=1 leaves the logged-in result list empty (checked live 2026-11-17).
+    # Page 1 is the plain keyword URL. Later pages use the site's own page/o pair.
+    params: dict[str, str | int] = {"keyword": keyword}
+    if page > 1:
+        params["page"] = page
+        params["o"] = (page - 1) * 30
+    return f"https://search.bilibili.com/all?{urlencode(params)}"
 
 
 def bili_video_url(bvid: str) -> str:

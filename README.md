@@ -9,7 +9,7 @@
 - 只用系统安装的 Google Chrome 打开正常网页（Playwright `executable_path`），每个站点一个持久 `user-data-dir`。数据来自渲染后的 DOM。
 - 不调用未公开接口，不算 wbi / x-s / x-t 签名，不把页面 XHR 当作数据源，不从浏览器数据库导出 cookie，也不要用户粘贴 cookie 或 token，不伪装官方 App。
 - 出现验证码、滑块或风控页时停止，返回 `needs_human_verification`，带上当前 URL 和截图路径。不会尝试绕过。
-- 只读。代码里的点击必须带允许的登录用途，并且控件文案要精确匹配（短信登录、获取验证码、登录、同意协议的复选框）。点赞、投币、收藏、评论、关注、发布、返回首页会被拒绝。搜索不点击结果。
+- 只读。代码里的点击必须带允许的登录用途，并且控件文案要精确匹配（短信登录、获取验证码、登录、新设备弹窗上的「验证」、同意协议的复选框）。点赞、投币、收藏、评论、关注、发布、返回首页、「重新发送」会被拒绝。搜索不点击结果。
 - 不打开推荐流：`https://www.bilibili.com/`、`/v/popular`、`https://www.xiaohongshu.com/explore`（没有笔记 id 的发现页，包括 `channel_id=homefeed_recommend`）。笔记详情 `/explore/{id}` 可以打开。被重定向到推荐流时会关掉页面，不返回那里的内容。
 - 密码、短信验证码、cookie、`qrcode_key`、`xsec_token` 不会写进日志。日志只走 stderr 和数据目录里的日志文件，并做脱敏。搜索结果里的笔记链接会保留页面自己带的 `xsec_token`，否则链接打不开；这条只出现在工具结果里，不出现在日志里。
 - 一个进程只有一个浏览器上下文，操作串行。浏览器崩溃会重启一次。退出时关闭 Chrome，让配置写回磁盘。崩溃留下的 `SingletonLock` 只在确认没有 Chrome 还占用该目录时删除，不会删 `Cookies`。
@@ -58,36 +58,36 @@ uv sync
     },
     "xiaohongshu": {
       "command": "uv",
-      "args": ["run", "--directory", "/ABS/PATH", "xhs-mcp"],
-      "env": {
-        "XHS_HEADED": "1"
-      }
+      "args": ["run", "--directory", "/ABS/PATH", "xhs-mcp-xvfb"]
     }
   }
 }
 ```
 
-有界面时给这个进程准备好 `DISPLAY`。助手侧只应看到 JSON-RPC；日志在 stderr。
+`xhs-mcp-xvfb` 在 `:90` 上没有显示时启动 `Xvfb :90`，然后以 `DISPLAY=:90` 和 `XHS_HEADED=1` 跑同一个服务。已经有人占用这块显示时不会再起一个。机器上没有 `Xvfb` 时直接退出并说明。助手侧只应看到 JSON-RPC；日志在 stderr。
 
 命令：
 
 ```bash
 uv run bili-mcp
-uv run xhs-mcp
+uv run xhs-mcp-xvfb
 ```
 
 ## 登录
 
-同一套 profile。进程正常退出后，下次启动还是这个登录态。`kill -9` 可能来不及把会话写盘，但下次启动会清掉已经死掉的 `SingletonLock`，而不是删掉整个 profile。
+同一套 profile。进程正常退出后，下次启动还是这个登录态。`kill -9` 可能来不及把会话写盘，但下次启动会清掉已经死掉的 `SingletonLock`，而不是删掉整个 profile。启动前会删掉 `Default/Sessions` 和 Current/Last Session、Tabs，并把 `restore_on_startup` 设成 5，避免 Chrome 把上次的几十个标签（包括首页和 `chrome-error`）重新打开。不删 Cookies，也不删 Login Data。打开之后只留一个标签；留下的如果是推荐流或错误页，就改成 `about:blank`。
 
 1. **扫码（优先）**  
    `login_qr_start` 打开官方登录页，把二维码截成 PNG，返回绝对路径，并作为 MCP 图片内容返回。用手机相册或另一块屏幕扫。  
    B 站用 App 扫。登录页会自己跳到 `?site=OVERSEAS&lang=zh-Hans` 或 `lang=en`，这次跳转会让第一次 `goto` 变成 `net::ERR_ABORTED`；只要最后还停在 `passport.bilibili.com` 上并且文档加载了，就当作打开成功，不报 `page_load_failed`。二维码画在 `.login-scan__qrcode` 里的 `canvas`（旁边可能还有一个没有 class 的 `img`），会比 DOMContentLoaded 晚几秒，截的是这块 canvas。语言参数不影响选择器。不点击「密码登录 / Password login」或「登录 / Login」，有界面窗口里账号、密码和短信表单留给人自己填。  
    小红书页面写的是小红书或微信。  
-   `login_qr_wait`（默认 90 秒，单次最长 180 秒）在当前页等到：已登录、二维码过期、需要人处理，或这一轮时间用完。等待期间这个浏览器被占用。  
-   同一张二维码在过期前可以反复调用 `login_qr_wait`。它不会重新打开登录页，所以不会把正在扫的码换掉。还没扫完时返回 `qr_pending`，`qr_still_valid` 为 true。页面显示出过期时返回 `qr_expired`，这时才重新 `login_qr_start`。冒烟命令的 `--wait` 仍然最长 180 秒。
+   手机确认后，B 站会把主框架打开到 `passport.biligame.com`、`passport.bigfunapp.cn` 或 `passport.bilibili.cn` 上的 `/x/passport-login/web/crossDomain`，然后再去 `www.bilibili.com/`。只放行那一条路径。首页仍然拦住。拦住之后改打开账号页确认登录，不把这次跳转报成未登录。  
+   `login_qr_wait`（默认 90 秒，单次最长 180 秒）会一直等到：已登录、二维码过期、小红书弹出短信二次验证、需要人处理，或这一轮时间用完。手机已经扫到但还没确认时，这次调用不会马上返回。等待期间这个浏览器被占用。  
+   同一张二维码在过期前可以反复调用 `login_qr_wait`。它不会重新打开登录页，所以不会把正在扫的码换掉。还没扫完并且这次时间用完时返回 `qr_pending`，`qr_still_valid` 为 true。页面显示出过期时返回 `qr_expired`，这时才重新 `login_qr_start`。  
+   小红书新设备会在扫码后弹出「短信验证码验证」，页面上已经写着打码的手机号。这时返回 `sms_verification_required`。把收到的数字交给 `login_sms_submit`。不要点「重新发送」，验证码会过期，重发由人决定。点「验证」之后网站会去首页，这次跳转被拦住，再在非推荐页上确认登录。  
+   冒烟命令的 `login-qr --wait` 会按墙上时钟继续等，直到已登录、过期、需要短信、或 `--wait` 的秒数用完。它不会在「请在手机上确认」时退出并把浏览器关掉。单次内部等待仍不超过 180 秒，更长的 `--wait` 会接着等。
 2. **短信**  
-   `login_sms_request(phone)` 再 `login_sms_submit(code)`。号码和验证码只作为工具参数，不进日志，也不会在结果里回显。  
+   `login_sms_request(phone)` 再 `login_sms_submit(code)`。号码和验证码只作为工具参数，不进日志，也不会在结果里回显。扫码后的新设备弹窗走同一个提交工具，点的是「验证」。  
    B 站短信页写着未注册手机号会自动注册，这是官网表单的行为。  
    没有密码参数。密码只由人在有界面的窗口里输入（浏览器自己的密码填充也行）。
 3. **有界面**  
@@ -95,14 +95,14 @@ uv run xhs-mcp
 
 `login_status` 会打开非推荐流页面核对：
 
-- B 站：`https://account.bilibili.com/account/home`。未登录时会跳到 `passport.bilibili.com`。已登录应能看到昵称或 UID；选择器对不上就返回 `login_state_unclear`，不会假装已登录。扫码和短信打开的是 `https://passport.bilibili.com/pc/passport/login`。裸的 `https://passport.bilibili.com/login` 会 HTTP 404，Chrome 把它当成下载；这时返回 `page_load_failed`，并写明页面没有作为文档打开。账号页如果也因此打不开，会再试一次这个 PC 登录页，用来区分「未登录」和「登录页没加载」。
-- 小红书：先打开 `/login`。能看到二维码或手机号框就是未登录。若被重定向到发现页，会立刻离开，再看搜索页头部。风控页单独返回 `needs_human_verification`。
+- B 站：`https://account.bilibili.com/account/home`。未登录时会跳到 `passport.bilibili.com`。已登录时昵称在 `span.home-top-msg-name`（2026-11-17 在已登录的账号页上看见）。选择器对不上就返回 `login_state_unclear`，不会假装已登录。扫码和短信打开的是 `https://passport.bilibili.com/pc/passport/login`。裸的 `https://passport.bilibili.com/login` 会 HTTP 404，Chrome 把它当成下载；这时返回 `page_load_failed`，并写明页面没有作为文档打开。账号页如果也因此打不开，会再试一次这个 PC 登录页，用来区分「未登录」和「登录页没加载」。
+- 小红书：先打开 `/login`。能看到二维码或手机号框就是未登录。若被重定向到发现页，会立刻离开，再看搜索页头部。已经有 uid 但头部没有昵称时，再打开这个 uid 的 `/user/profile/<uid>`，不打开发现页。风控页单独返回 `needs_human_verification`。
 
 ## 工具
 
 两边都有：`login_status`、`login_qr_start`、`login_qr_wait`、`login_sms_request`、`login_sms_submit`、`search`。
 
-- B 站 `search(keyword, limit=10, page=1)`。`limit` 1–30，`page` 1–50。直接打开 `https://search.bilibili.com/all?keyword=&page=`。结果字段：`title`、`bvid`、`url`、`up_name`、`play_count`（卡片上的播放文案）、`duration`、`publish_date`、`cover_url`。还有 `get_video(bvid)`：标题、简介、标签、UP 主。
+- B 站 `search(keyword, limit=10, page=1)`。`limit` 1–30，`page` 1–50。第一页是 `https://search.bilibili.com/all?keyword=`，不带 `page=1`（带上之后已登录的结果列表是空的）。后面的页是 `page=N&o=(N-1)*30`。先等 `.bili-video-card__info--tit`，因为 `.search-page` 会比卡片更早出现。结果字段：`title`、`bvid`、`url`、`up_name`、`play_count`（卡片上的播放文案）、`duration`、`publish_date`、`cover_url`。还有 `get_video(bvid)`：标题、简介、标签、UP 主。
 - 小红书 `search(keyword, limit=10)`。打开搜索页。未登录时页面是「登录后查看搜索结果」，返回 `logged_out`，不是空列表。结果字段：`title`、`note_id`、`url`（保留 `xsec_token`）、`author`、`like_count`、`cover_url`、`type`（看得到播放或图文标记才填）。还有 `get_note(url)`，只接受笔记 URL。
 
 空结果是 `status: no_results`。页面打不开、被风控、或结构和预期不符，是失败状态，不会报成 0 条。
@@ -147,11 +147,11 @@ uv run pytest
 
 ## 开发时实际看过的页面
 
-在这台能访问公网的环境里，用系统 Chrome 打开过公开页面，用来核对选择器。没有登录，没有提交短信，没有扫码成功。
+开发环境里用系统 Chrome 打开过公开页面来核对选择器，当时没有登录。下面单独标出的已登录行为，是 2026-11-17 在目标机器的真实 profile 上看的。
 
 看过并且写进选择器的：
 
-- B 站搜索页卡片：`.bili-video-card`、标题、BV 链接、UP 主、播放文案、时长、日期、`button.vui_pagenation--btn-side`（「下一页」）。`page=2` 会换一批结果，地址会变成 `/zh-Hans/all`。
+- B 站搜索页卡片：`.bili-video-card`、标题、BV 链接、UP 主、播放文案、时长、日期、`button.vui_pagenation--btn-side`（「下一页」）。未登录时 `page=2` 会换一批结果，地址会变成 `/zh-Hans/all`。已登录时带裸的 `page=1` 会画出 0 张卡片；第一页必须是不带 `page` 的地址，第二页是 `page=2&o=30`，并且和第一页的 BV 不同。卡片选择器要等 `.bili-video-card__info--tit`，不能只等 `.search-page`。
 - B 站未登录时，`account.bilibili.com/account/home` 会跳到 `passport.bilibili.com`。无头打开 `https://passport.bilibili.com/pc/passport/login` 时，第一次导航会被客户端跳转到 `?site=OVERSEAS&lang=zh-Hans` 打断（`net::ERR_ABORTED`）；等地址稳定后就是登录页。这台机器上可见的码是 `.login-scan__qrcode img`（alt 为 Scan me!，约 140px），同级 `canvas` 在 DOM 里但布局尺寸是 0。目标机器的有界面页面则是 canvas 有尺寸、img 没有 class。两种都截有尺寸的那一个，优先 canvas。截图放大后能解成一条 https 二维码；内容没有记下来，也没有拿去扫码登录。英文界面还有 Password login 和 SMS Login，工具不点 Login、不填密码。裸的 `/login` 在目标机器上会 HTTP 404，Chrome 把它当成下载。
 - B 站搜索页未登录头部有 `.header-avatar-unlogin-entry`。
 - B 站视频页：`h1.video-title`、`.desc-info-text`、`a.up-name`、`.video-tag-container a.tag-link`。页面会先闪一下「出错啦」再出来，所以详情会多等几秒。发布日期选择器没有在真站上对上，可能是空的。
@@ -159,10 +159,17 @@ uv run pytest
 - 小红书未登录搜索页文案是「登录后查看搜索结果」，并且页头有指向 `/explore?channel_id=homefeed_recommend` 的链接。这些链接被白名单拒绝。
 - 小红书无头模式进入 `/website-login/error`，标题「安全限制」，正文「当前网络存在风险」，`error_code=300012`。
 
+2026-11-17 在已登录的 profile 上核对过（这是使用方在目标机器上做的，本仓库的自动化测试没有再登一次）：
+
+- B 站扫码确认后主框架会打开 `passport.biligame.com/x/passport-login/web/crossDomain`，随后去首页。只放行这条路径；首页仍拒绝。账号页昵称是 `span.home-top-msg-name`。
+- B 站已登录搜索的第一页和第二页都能读到卡片，第二页的 BV 和第一页不同。
+- 小红书扫码后新设备弹出「短信验证码验证」，正文是「验证码已发送至」加已经打码的号码，按钮是「验证」，旁边是「重新发送」。提交后会跳首页，这次跳转被拒绝，登录态留在 profile 里。`login_status` 能读到 uid。已登录搜索返回 10 条笔记。
+- 两个 profile 在进程退出再开之后还在。Chrome 会把上次的标签恢复出来（包括首页和 `chrome-error`），所以启动时清会话文件并只留一个标签。
+
 没看过、选择器是按页面结构写的，真登录后可能要改：
 
-- 已登录时的昵称 / UID（B 站账号页、小红书头像或个人主页）。
-- 小红书笔记卡片（`section.note-item`、`xsec_token` 链接、作者、赞数、播放图标）。未登录时搜索页不给卡片。
+- 小红书个人主页上的昵称。已登录时头部没有昵称，代码会打开 `/user/profile/<uid>` 再找 `.user-name`、`.user-nickname` 或标题里的「名字 - 小红书」。这条选择器没有在真站上对过。
+- 小红书笔记卡片（`section.note-item`、`xsec_token` 链接、作者、赞数、播放图标）。未登录时搜索页不给卡片。已登录搜索能读到笔记，但卡片选择器本身没有逐项对过。
 - 小红书笔记详情标题和正文。
 - 非海外版 B 站登录页（国内 IP 可能不是 `site=OVERSEAS` 这套 DOM）。
 - 收藏夹、稍后再看。
@@ -179,3 +186,4 @@ uv run pytest
 - 播放量取的是搜索卡片左侧第一项文案，和页面上看到的一致，不另做换算。
 - 搜索标题里的 HTML 实体（例如 `OP&amp;ED`）会解成普通字符。链接里的 `xsec_token` 仍原样保留。
 - 小红书有界面模式会注册 Service Worker。这类请求没有 frame，路由不能因此抛错，也不能因此放行推荐流或非 GET/HEAD/OPTIONS 的 worker 请求。
+- 被拒绝的文档导航只把主机名和路径写进日志，不写查询串，避免 `xsec_token` 进日志。

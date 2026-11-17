@@ -10,7 +10,7 @@ import sys
 from mcp_browser.config import SiteConfig
 from mcp_browser.errors import SiteError
 from mcp_browser.session import BrowserSession
-from mcp_browser.smoke import doctor, emit
+from mcp_browser.smoke import doctor, emit, poll_qr_wait
 
 from xhs_mcp import flow
 from xhs_mcp.policy import XhsPolicy
@@ -49,9 +49,7 @@ def main() -> None:
                 payload = await flow.login_qr_start(session)
                 payload.pop("_image_path", None)
                 if args.wait and payload.get("status") == "qr_ready":
-                    waited = await flow.login_qr_wait(session, args.wait)
-                    waited["qr_path"] = payload.get("qr_path")
-                    return waited
+                    return await poll_qr_wait(flow.login_qr_wait, session, args.wait, payload.get("qr_path"))
                 return payload
             if args.cmd == "search":
                 return await flow.search_notes(session, args.keyword, args.limit)

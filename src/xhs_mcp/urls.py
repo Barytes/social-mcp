@@ -5,6 +5,10 @@ PROFILE_URL = "https://www.xiaohongshu.com/user/profile"
 FAVORITES_NOTE = "https://www.xiaohongshu.com/user/profile/{user_id}"
 
 
+def xhs_profile_url(uid: str) -> str:
+    return f"https://www.xiaohongshu.com/user/profile/{uid}"
+
+
 def xhs_search_url(keyword: str) -> str:
     query = urlencode({"keyword": keyword, "source": "web_search_result_notes"})
     return f"https://www.xiaohongshu.com/search_result?{query}"

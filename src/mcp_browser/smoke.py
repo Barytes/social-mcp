@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
+import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
 from mcp_browser.config import SiteConfig
+
+# login_qr_wait may return these before the person has finished. Keep the browser up.
+_KEEP_WAITING = {"awaiting_confirmation", "qr_pending", "qr_not_ready"}
 
 
 def dumps(payload: dict[str, Any]) -> str:
@@ -29,6 +35,31 @@ def emit(payload: dict[str, Any]) -> int:
     if error_type in {"page_load_failed", "page_not_understood", "login_ui_not_found"}:
         return 4
     return 1
+
+
+async def poll_qr_wait(wait: Callable[..., Awaitable[dict]], session: Any, seconds: float, qr_path: str | None) -> dict:
+    """Call login_qr_wait until login finishes, the code expires, SMS is required, or time runs out.
+
+    awaiting_confirmation is not an exit. A single wait call also blocks, but --wait can be
+    longer than that call's 180s cap, so this loops on the wall clock.
+    """
+    deadline = time.monotonic() + max(0.0, float(seconds))
+    payload: dict[str, Any] = {}
+    while True:
+        left = deadline - time.monotonic()
+        if left < 1:
+            break
+        step = min(left, 180.0)
+        started = time.monotonic()
+        payload = await wait(session, step)
+        if qr_path:
+            payload["qr_path"] = qr_path
+        status = payload.get("status")
+        if payload.get("logged_in") is True or status not in _KEEP_WAITING:
+            return payload
+        if time.monotonic() - started < 0.5:
+            await asyncio.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
+    return payload
 
 
 def doctor(config: SiteConfig) -> dict[str, Any]:

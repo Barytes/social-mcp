@@ -29,12 +29,13 @@ from mcp_browser.guard import ClickPurpose, FillPurpose
 from mcp_browser.qr import expired_error, not_ready_payload, pending_payload, text_says_expired
 from mcp_browser.redact import redact
 
-from xhs_mcp.parse import classify_xhs_search, parse_xhs_identity, parse_xhs_note
-from xhs_mcp.urls import LOGIN_URL, xhs_search_url
+from xhs_mcp.parse import classify_xhs_search, parse_xhs_identity, parse_xhs_note, parse_xhs_profile_name
+from xhs_mcp.urls import LOGIN_URL, xhs_profile_url, xhs_search_url
 
 log = logging.getLogger(__name__)
 
 _QR_CONFIRM = ("扫描成功", "请在手机上确认", "确认登录")
+_MASKED_PHONE = re.compile(r"(\+?\d{1,4}\s*\d{2,4}\*+\d{2,4})")
 _LOGGED_OUT = (
     "未登录。小红书同一账号只保留一个网页会话：新的网页登录会把这次会话踢下线。"
     "这次检查分不清「还没登录」和「被新的网页登录替换」。"
@@ -188,7 +189,47 @@ async def _read_identity(page, session) -> dict:
             html = await page.content()
             identity = parse_xhs_identity(html, page.url, text)
     identity["url"] = page.url
+    return await _attach_profile_name(page, session, identity)
+
+
+async def _attach_profile_name(page, session, identity: dict) -> dict:
+    """The search header exposes a uid. The nickname is on that user's profile, not the feed."""
+    if identity.get("logged_in") is not True or identity.get("nickname") or not identity.get("uid"):
+        return identity
+    url = xhs_profile_url(identity["uid"])
+    if session.policy.classify(url) != "allow":
+        return identity
+    try:
+        await goto_allowed(page, url, session.policy, session)
+    except FeedBlocked:
+        return identity
+    try:
+        await page.wait_for_selector(".user-name, .user-nickname", timeout=8000)
+    except Exception:
+        pass
+    html = await page.content()
+    name = parse_xhs_profile_name(html)
+    if name:
+        identity["nickname"] = name
+        identity["nickname_from"] = "user_profile"
+    identity["url"] = page.url
     return identity
+
+
+def sms_second_factor(text: str) -> dict | None:
+    """New-device modal. The phone on the page is already masked. Do not resend the code."""
+    if "短信验证码验证" not in text and "验证码已发送至" not in text:
+        return None
+    match = _MASKED_PHONE.search(text or "")
+    masked = match.group(1) if match else ""
+    return {
+        "pending": "sms_verification_required",
+        "masked_phone": masked,
+        "message": (
+            "新设备需要短信验证码。页面上的码已经发出，请把收到的数字传给 login_sms_submit。"
+            "不要点重新发送；过期后再由人决定要不要重发。"
+        ),
+    }
 
 
 async def login_status(session) -> dict:
@@ -291,29 +332,46 @@ async def login_qr_wait(session, timeout_s: float = 90) -> dict:
 
     async def op(page):
         # Do not open the login URL here. A second navigation replaces the QR.
+        # Scanned-but-not-confirmed stays inside this call until the timeout.
         text = await _qr_text(page)
         if text_says_expired(text):
             raise expired_error(page.url)
-        if not await _qr_visible(page):
-            if "/login" not in (page.url or "") and "website-login/error" not in (page.url or ""):
-                return await _read_identity(page, session)
-            return {"pending": "qr_not_ready", "url": page.url}
+        factor = sms_second_factor(text)
+        if factor is not None:
+            factor["url"] = page.url
+            return factor
         deadline = time.monotonic() + float(timeout_s)
+        saw_confirm = False
         while time.monotonic() < deadline:
             await _ensure_no_challenge(page, session)
             text = await _qr_text(page)
             if text_says_expired(text):
                 raise expired_error(page.url)
-            if not await _qr_visible(page):
-                if "/login" not in (page.url or "") and "website-login/error" not in (page.url or ""):
-                    return await _read_identity(page, session)
-                return {"pending": "qr_not_ready", "url": page.url}
+            factor = sms_second_factor(text)
+            if factor is not None:
+                factor["url"] = page.url
+                return factor
             if any(phrase in text for phrase in _QR_CONFIRM):
-                return {"logged_in": None, "pending": "awaiting_confirmation", "url": page.url}
+                saw_confirm = True
+            elif not await _qr_visible(page) and "/login" not in (page.url or "") and "website-login/error" not in (page.url or ""):
+                identity = await _read_identity(page, session)
+                if identity.get("logged_in") is True or identity.get("logged_in") is False:
+                    return identity
             await page.wait_for_timeout(2000)
-        if text_says_expired(await _qr_text(page)):
+        text = await _qr_text(page)
+        if text_says_expired(text):
             raise expired_error(page.url)
-        return {"logged_in": None, "pending": "qr_pending", "url": page.url}
+        factor = sms_second_factor(text)
+        if factor is not None:
+            factor["url"] = page.url
+            return factor
+        if saw_confirm:
+            return {"logged_in": None, "pending": "awaiting_confirmation", "url": page.url}
+        if await _qr_visible(page):
+            return {"logged_in": None, "pending": "qr_pending", "url": page.url}
+        if "/login" not in (page.url or "") and "website-login/error" not in (page.url or ""):
+            return await _read_identity(page, session)
+        return {"logged_in": None, "pending": "qr_not_ready", "url": page.url}
 
     try:
         identity = await session.call("login_qr_wait", op)
@@ -328,6 +386,15 @@ async def login_qr_wait(session, timeout_s: float = 90) -> dict:
         return _logged_out(identity.get("url") or "")
     pending = identity.get("pending")
     url = identity.get("url")
+    if pending == "sms_verification_required":
+        return {
+            "ok": True,
+            "status": "sms_verification_required",
+            "logged_in": False,
+            "masked_phone": identity.get("masked_phone") or "",
+            "message": identity.get("message"),
+            "url": url,
+        }
     if pending == "qr_pending":
         return pending_payload(url)
     if pending == "qr_not_ready":
@@ -398,8 +465,21 @@ async def login_sms_submit(session, code: str) -> dict:
         await safe_fill(field, sms, FillPurpose.SMS_CODE)
         await _maybe_terms(page)
         await page.wait_for_timeout(300)
-        await _click_exact(page, "登录", ClickPurpose.SUBMIT_LOGIN)
-        await page.wait_for_timeout(1500)
+        text = await _body_text(page)
+        # The new-device modal's button is 验证. Do not click 重新发送; the code was already sent.
+        if sms_second_factor(text) is not None:
+            await _click_exact(page, "验证", ClickPurpose.SUBMIT_LOGIN)
+        else:
+            await _click_exact(page, "登录", ClickPurpose.SUBMIT_LOGIN)
+        try:
+            await page.wait_for_timeout(2000)
+        except Exception:
+            pass
+        blocked = getattr(session, "last_blocked_url", None) or ""
+        if session.policy.classify(blocked) == "feed":
+            # 验证 succeeds by navigating to the home feed, which this server refuses.
+            # The session is the part that matters; confirm it on a non-feed page.
+            return await _read_identity(page, session)
         await _ensure_no_challenge(page, session)
         text = await _body_text(page)
         if any(phrase in text for phrase in ("验证码错误", "验证码不正确", "验证码已过期")):

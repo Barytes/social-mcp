@@ -65,7 +65,7 @@ class FillPurpose(StrEnum):
 _CLICK_TEXT = {
     ClickPurpose.SWITCH_LOGIN_METHOD: ("短信登录", "验证码登录", "手机号登录", "扫码登录", "二维码登录"),
     ClickPurpose.REQUEST_SMS_CODE: ("获取验证码", "发送验证码", "重新获取"),
-    ClickPurpose.SUBMIT_LOGIN: ("登录/注册", "登录"),
+    ClickPurpose.SUBMIT_LOGIN: ("登录/注册", "登录", "验证"),
     ClickPurpose.REFRESH_QR: ("点击刷新", "刷新二维码", "二维码已失效", "刷新"),
     ClickPurpose.ACCEPT_LOGIN_TERMS: ("我已阅读并同意", "同意"),
 }
