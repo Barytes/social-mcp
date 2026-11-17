@@ -2,7 +2,7 @@
 
 import asyncio
 
-from mcp_browser.session import BrowserSession, should_block_request
+from mcp_browser.session import BrowserSession, is_playback_request, should_block_request
 from xhs_mcp.policy import XhsPolicy
 
 _SW_ERROR = "Service Worker requests do not have an associated frame."
@@ -102,3 +102,14 @@ def test_route_handler_survives_a_service_worker_request() -> None:
         assert allowed.action == "continue"
 
     asyncio.run(run())
+
+
+def test_playback_and_history_reports_are_aborted() -> None:
+    policy = XhsPolicy()
+    assert is_playback_request(Request("https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/a.m4s", resource="xhr"))
+    assert should_block_request(policy, Request("https://api.bilibili.com/x/player/wbi/playurl?bvid=BV1", resource="xhr"))
+    assert should_block_request(policy, Request("https://api.bilibili.com/x/v2/history/report", resource="xhr"))
+    assert should_block_request(policy, Request("https://api.bilibili.com/x/click-interface/click/web/h5", resource="xhr"))
+    image = Request("https://i0.hdslb.com/bfs/archive/cover.jpg", resource="image")
+    assert is_playback_request(image) is False
+    assert should_block_request(policy, Request(_LOGIN, resource="image")) is False

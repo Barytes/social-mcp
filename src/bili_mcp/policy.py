@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from mcp_browser.policy import ALLOW, DENY, FEED, DocumentPolicy, _host, _path, classify_common, under
 
 _WWW = {"www.bilibili.com", "bilibili.com", "m.bilibili.com"}
@@ -10,11 +12,11 @@ _WWW_PREFIXES = (
     "/zh-Hans/video",
     "/zh-Hant/video",
     "/account",
-    "/watchlater",
     "/list/watchlater",
-    "/medialist/play/watchlater",
     "/blackboard",
 )
+_SPACE_UID = re.compile(r"^/\d{1,16}$")
+_SPACE_FAV = re.compile(r"^/\d{1,16}/favlist$")
 
 # After the QR is confirmed, the official web login sets the session by loading
 # this one document on a sibling passport host, then sends the browser to the
@@ -34,7 +36,13 @@ class BiliPolicy(DocumentPolicy):
             return ALLOW
         if host == "search.bilibili.com":
             return ALLOW
-        if host in {"passport.bilibili.com", "account.bilibili.com", "space.bilibili.com"}:
+        if host == "space.bilibili.com":
+            # Own space is the redirect target of / . Favorite folders live under /<uid>/favlist.
+            # Dynamics and other space sections stay closed.
+            if path == "/" or _SPACE_UID.match(path) or _SPACE_FAV.match(path):
+                return ALLOW
+            return DENY
+        if host in {"passport.bilibili.com", "account.bilibili.com"}:
             return ALLOW
         if host in _WWW:
             if path in {"/", "/index.html"}:

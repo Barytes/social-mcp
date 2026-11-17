@@ -66,6 +66,23 @@ async def safe_click(locator: Any, purpose: ClickPurpose) -> None:
     await locator.click(timeout=5000)
 
 
+async def silence_media(page: Any) -> None:
+    """Mute and pause every media element. Playback requests are aborted separately."""
+    try:
+        await page.evaluate(
+            """() => {
+                for (const el of document.querySelectorAll('video, audio')) {
+                    el.muted = true;
+                    el.autoplay = false;
+                    el.removeAttribute('autoplay');
+                    try { el.pause(); } catch (e) {}
+                }
+            }"""
+        )
+    except Exception:
+        log.info("could not pause media elements")
+
+
 async def safe_fill(locator: Any, value: str, purpose: FillPurpose) -> None:
     target = await _read_target(locator)
     assert_fill_allowed(purpose, target)

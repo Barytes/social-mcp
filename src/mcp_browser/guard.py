@@ -31,6 +31,11 @@ _FORBIDDEN_TEXT = (
     "回复",
     "返回首页",
     "不感兴趣",
+    "删除",
+    "播放全部",
+    "批量操作",
+    "新建收藏夹",
+    "稍后再看",
     "like",
     "unlike",
     "coin",
@@ -55,11 +60,14 @@ class ClickPurpose(StrEnum):
     SUBMIT_LOGIN = "submit_login"
     REFRESH_QR = "refresh_qr"
     ACCEPT_LOGIN_TERMS = "accept_login_terms"
+    TURN_PAGE = "turn_page"
+    SORT_LIST = "sort_list"
 
 
 class FillPurpose(StrEnum):
     PHONE = "phone"
     SMS_CODE = "sms_code"
+    LIST_FILTER = "list_filter"
 
 
 _CLICK_TEXT = {
@@ -68,6 +76,8 @@ _CLICK_TEXT = {
     ClickPurpose.SUBMIT_LOGIN: ("登录/注册", "登录", "验证"),
     ClickPurpose.REFRESH_QR: ("点击刷新", "刷新二维码", "二维码已失效", "刷新"),
     ClickPurpose.ACCEPT_LOGIN_TERMS: ("我已阅读并同意", "同意"),
+    ClickPurpose.TURN_PAGE: ("下一页", "上一页"),
+    ClickPurpose.SORT_LIST: ("最近收藏", "最多播放", "最近投稿"),
 }
 
 
@@ -114,10 +124,13 @@ def _reject_write_markers(target: ClickTarget) -> None:
 def assert_click_allowed(purpose: ClickPurpose, target: ClickTarget) -> None:
     if not isinstance(purpose, ClickPurpose):
         raise ReadOnlyViolation("refusing a click with no allowlisted purpose")
+    text = _compact(target.text) or _compact(target.aria)
+    # "最近收藏" is the folder's own sort control. The exact label is not the favorite button.
+    if purpose is ClickPurpose.SORT_LIST and text in _CLICK_TEXT[ClickPurpose.SORT_LIST]:
+        return
     _reject_write_markers(target)
     if purpose is ClickPurpose.ACCEPT_LOGIN_TERMS and target.input_type == "checkbox":
         return
-    text = _compact(target.text) or _compact(target.aria)
     if len(text) > _MAX_CLICK_TEXT:
         raise ReadOnlyViolation("refusing to click a large container")
     # Exact label match. "短信登录" must not satisfy the submit allowlist just because it contains "登录".
@@ -137,6 +150,12 @@ def assert_fill_allowed(purpose: FillPurpose, target: ClickTarget) -> None:
     if purpose is FillPurpose.PHONE:
         if not any(token in hint for token in ("手机", "phone", "mobile", "tel")):
             raise ReadOnlyViolation("refusing to type a phone number into an unrelated field")
+        return
+    if purpose is FillPurpose.LIST_FILTER:
+        placeholder = target.placeholder or ""
+        class_name = target.class_name or ""
+        if placeholder != "请输入关键词" or "fav-list-header-filter__search" not in class_name:
+            raise ReadOnlyViolation("refusing to type into anything except the folder's own search box")
         return
     if not any(token in hint for token in ("验证码", "code", "sms")):
         raise ReadOnlyViolation("refusing to type an SMS code into an unrelated field")

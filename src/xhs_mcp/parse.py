@@ -14,6 +14,7 @@ from urllib.parse import urlsplit, urlunsplit
 from bs4 import BeautifulSoup
 
 _NOTE_HREF = re.compile(r"/(?:explore|discovery/item|search_result)/([A-Za-z0-9]{6,64})")
+_PROFILE_NOTE = re.compile(r"/user/profile/[A-Za-z0-9]{6,64}/([A-Za-z0-9]{6,64})")
 _EMPTY = ("未找到相关", "没有找到相关", "换个词", "搜索结果为空", "暂无搜索结果")
 
 
@@ -33,7 +34,8 @@ def _absolute(href: str) -> str:
 
 
 def _note_from_href(href: str) -> tuple[str, str] | None:
-    match = _NOTE_HREF.search(urlsplit(href).path)
+    path = urlsplit(href).path
+    match = _NOTE_HREF.search(path) or _PROFILE_NOTE.search(path)
     if match is None:
         return None
     # Reject the bare feed query, which has no note id in the path.
@@ -127,32 +129,121 @@ def classify_xhs_search(html: str, url: str, text: str) -> dict:
     return {"kind": "not_understood"}
 
 
+def _count_text(soup, selector: str) -> str | None:
+    element = soup.select_one(selector)
+    if element is None:
+        return None
+    count = element.select_one(".count")
+    return _clean((count or element).get_text(" ", strip=True))
+
+
 def parse_xhs_note(html: str, url: str) -> dict | None:
     soup = BeautifulSoup(html, "html.parser")
     title_el = soup.select_one("#detail-title, .note-content .title, .note-scroller .title")
     if title_el is None:
         return None
     desc_el = soup.select_one("#detail-desc, .note-content .desc, .note-text")
-    author_el = soup.select_one(".author-container .username, .author-wrapper .name, .username")
+    author_el = soup.select_one(".author-container .username, a.username, .author-wrapper .name, .username")
     tags: list[str] = []
     for tag in soup.select("a.tag, #hash-tag a, a.hash-tag"):
         text = (_clean(tag.get_text(" ", strip=True)) or "").lstrip("#")
         if text and text not in tags:
             tags.append(text)
-    parsed = _note_from_href(urlsplit(url).path)
+    parsed = _note_from_href(url)
     note_id = parsed[0] if parsed else None
-    if note_id is None:
-        match = _NOTE_HREF.search(urlsplit(url).path)
-        note_id = match.group(1) if match else None
     description = _clean(desc_el.get_text(" ", strip=True) if desc_el else None) or ""
+    images: list[str] = []
+    for image in soup.select(".note-content img, .swiper-slide img, img.note-image"):
+        src = _media(image.get("src"))
+        if src and "avatar" not in " ".join(image.get("class") or []) and src not in images:
+            images.append(src)
+    date_el = soup.select_one(".date, .bottom-container .date, .note-scroller .date")
+    video = soup.select_one("video, .player-container, .xgplayer") is not None
     return {
         "note_id": note_id,
         "url": url,
         "title": _clean(title_el.get_text(" ", strip=True)),
         "author": _clean(author_el.get_text(" ", strip=True) if author_el else None),
+        "author_url": _absolute(author_el.get("href")) if author_el is not None and author_el.get("href") else None,
         "description": description[:4000] or None,
         "tags": tags[:30],
+        "images": images[:30],
+        "video": video,
+        "publish_time": _clean(date_el.get_text(" ", strip=True) if date_el else None),
+        "like_count": _count_text(soup, ".like-wrapper"),
+        "collect_count": _count_text(soup, ".collect-wrapper"),
+        "comment_count": _count_text(soup, ".chat-wrapper"),
     }
+
+
+def _preferred_note_href(card) -> str | None:
+    anchors = card.select("a[href]")
+    with_token = [anchor.get("href") or "" for anchor in anchors if "xsec_token" in (anchor.get("href") or "")]
+    for href in with_token:
+        if _note_from_href(href) is not None:
+            return href
+    for anchor in anchors:
+        href = anchor.get("href") or ""
+        if _note_from_href(href) is not None:
+            return href
+    return None
+
+
+def parse_xhs_favorite_notes(html: str) -> list[dict]:
+    """Note cards on the user's own 收藏 tab. The feed is not read."""
+    soup = BeautifulSoup(html, "html.parser")
+    notes: list[dict] = []
+    seen: set[str] = set()
+    for card in soup.select("section.note-item, div.note-item"):
+        href = _preferred_note_href(card)
+        if not href:
+            continue
+        parsed = _note_from_href(href)
+        if parsed is None:
+            continue
+        note_id, url = parsed
+        if note_id in seen:
+            continue
+        seen.add(note_id)
+        title_el = card.select_one("a.title, .footer .title, .title")
+        author_el = card.select_one(".author-wrapper .name, a.author .name, a.author")
+        author_link = card.select_one("a.author")
+        like_el = card.select_one(".like-wrapper .count, span.count")
+        cover = card.select_one("a.cover img") or card.select_one("img")
+        notes.append(
+            {
+                "title": _clean(title_el.get_text(" ", strip=True) if title_el else None),
+                "note_id": note_id,
+                "url": url,
+                "author": _clean(author_el.get_text(" ", strip=True) if author_el else None),
+                "author_url": _absolute(author_link.get("href")) if author_link is not None and author_link.get("href") else None,
+                "like_count": _clean(like_el.get_text(" ", strip=True) if like_el else None),
+                "cover_url": _media(cover.get("src") if cover else None),
+            }
+        )
+    return notes
+
+
+_BOARD_HREF = re.compile(r"/board/([A-Za-z0-9]{6,64})")
+
+
+def parse_xhs_board_tab(html: str) -> dict:
+    """专辑 tab. The notes capture only shows the count, not the board document."""
+    soup = BeautifulSoup(html, "html.parser")
+    text = soup.get_text(" ", strip=True)
+    count_match = re.search(r"专辑\s*[·・]\s*(\d+)", text)
+    album_count = int(count_match.group(1)) if count_match else None
+    boards: list[dict] = []
+    seen: set[str] = set()
+    for anchor in soup.select("a[href*='/board/']"):
+        href = anchor.get("href") or ""
+        match = _BOARD_HREF.search(urlsplit(href).path)
+        if match is None or match.group(1) in seen:
+            continue
+        seen.add(match.group(1))
+        name = _clean(anchor.get_text(" ", strip=True))
+        boards.append({"id": match.group(1), "name": name, "url": _absolute(href)})
+    return {"album_count": album_count, "boards": boards}
 
 
 def parse_xhs_profile_name(html: str) -> str | None:

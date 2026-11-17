@@ -8,6 +8,7 @@ from mcp_browser.policy import ALLOW, DENY, FEED, DocumentPolicy, _host, _path, 
 
 _HOSTS = {"www.xiaohongshu.com", "xiaohongshu.com"}
 _NOTE = re.compile(r"^/(explore|discovery/item)/[A-Za-z0-9]{6,64}$")
+_PROFILE_NOTE = re.compile(r"^/user/profile/[A-Za-z0-9]{6,64}/[A-Za-z0-9]{6,64}$")
 
 
 class XhsPolicy(DocumentPolicy):
@@ -37,4 +38,5 @@ class XhsPolicy(DocumentPolicy):
     def is_note(self, url: str) -> bool:
         if self.classify(url) != ALLOW:
             return False
-        return _NOTE.match(_path(url)) is not None
+        path = _path(url)
+        return _NOTE.match(path) is not None or _PROFILE_NOTE.match(path) is not None

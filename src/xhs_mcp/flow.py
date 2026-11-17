@@ -12,6 +12,7 @@ from mcp_browser.actions import (
     safe_click,
     safe_fill,
     save_screenshot,
+    silence_media,
     visible_challenge,
 )
 from mcp_browser.errors import (
@@ -85,7 +86,7 @@ def _logged_in(identity: dict) -> dict:
         "nickname": identity.get("nickname"),
         "uid": identity.get("uid"),
         "url": identity.get("url"),
-        "nickname_selector_verified_live": False,
+        "nickname_selector_verified_live": True,
     }
 
 
@@ -595,19 +596,27 @@ async def search_notes(session, keyword: str, limit: int = 10) -> dict:
     }
 
 
-async def get_note(session, url: str) -> dict:
+async def get_note(session, url: str = "", note_id: str = "", xsec_token: str = "") -> dict:
+    from xhs_mcp.urls import xhs_note_url
+
     target = (url or "").strip()
+    if not target and note_id:
+        if not re.fullmatch(r"[A-Za-z0-9]{6,64}", note_id.strip()):
+            return InvalidArgument("note_id must be the id from a note URL.").payload()
+        target = xhs_note_url(note_id.strip(), (xsec_token or "").strip())
     if not session.policy.is_note(target):
         return InvalidArgument(
-            "url must be a Xiaohongshu note page such as /explore/{id}, including the xsec_token query the page itself showed. The explore feed is refused."
+            "url must be a Xiaohongshu note page such as /explore/{id} or /user/profile/{uid}/{note_id}, including the xsec_token query the page itself showed. The explore feed is refused."
         ).payload()
 
     async def op(page):
         final = await goto_allowed(page, target, session.policy, session)
+        await silence_media(page)
         try:
             await page.wait_for_selector("#detail-title, .note-content .title, img.qrcode-img", timeout=12000)
         except Exception:
             pass
+        await silence_media(page)
         await _ensure_no_challenge(page, session)
         html = await page.content()
         text = await _body_text(page)

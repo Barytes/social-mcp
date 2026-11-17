@@ -102,20 +102,24 @@ uv run xhs-mcp-xvfb
 
 两边都有：`login_status`、`login_qr_start`、`login_qr_wait`、`login_sms_request`、`login_sms_submit`、`search`。
 
-- B 站 `search(keyword, limit=10, page=1)`。`limit` 1–30，`page` 1–50。第一页是 `https://search.bilibili.com/all?keyword=`，不带 `page=1`（带上之后已登录的结果列表是空的）。后面的页是 `page=N&o=(N-1)*30`。先等 `.bili-video-card__info--tit`，因为 `.search-page` 会比卡片更早出现。结果字段：`title`、`bvid`、`url`、`up_name`、`play_count`（卡片上的播放文案）、`duration`、`publish_date`、`cover_url`。还有 `get_video(bvid)`：标题、简介、标签、UP 主。
-- 小红书 `search(keyword, limit=10)`。打开搜索页。未登录时页面是「登录后查看搜索结果」，返回 `logged_out`，不是空列表。结果字段：`title`、`note_id`、`url`（保留 `xsec_token`）、`author`、`like_count`、`cover_url`、`type`（看得到播放或图文标记才填）。还有 `get_note(url)`，只接受笔记 URL。
+- B 站 `search(keyword, limit=10, page=1)`。`limit` 1–30，`page` 1–50。第一页是 `https://search.bilibili.com/all?keyword=`，不带 `page=1`（带上之后已登录的结果列表是空的）。后面的页是 `page=N&o=(N-1)*30`。先等 `.bili-video-card__info--tit`，因为 `.search-page` 会比卡片更早出现。结果字段：`title`、`bvid`、`url`、`up_name`、`play_count`（卡片上的播放文案）、`duration`、`publish_date`、`cover_url`。还有 `get_video(bvid)`：标题、UP 主和空间地址、发布时间、时长、简介、标签、页面上的播放/赞/币/藏/转发、分 P。不播放。
+- 小红书 `search(keyword, limit=10)`。打开搜索页。未登录时页面是「登录后查看搜索结果」，返回 `logged_out`，不是空列表。结果字段：`title`、`note_id`、`url`（保留 `xsec_token`）、`author`、`like_count`、`cover_url`、`type`（看得到播放或图文标记才填）。还有 `get_note(url)` 或 `get_note(note_id, xsec_token)`。笔记地址可以是 `/explore/{id}`，也可以是收藏里的 `/user/profile/{uid}/{note_id}`。详情读取标题、作者和主页、正文、标签、图片、是否视频、时间和页面上的计数。收藏页上的卡片选择器来自抓取；详情页多出来的计数字段没有在真站上再对过。
 
 空结果是 `status: no_results`。页面打不开、被风控、或结构和预期不符，是失败状态，不会报成 0 条。
 
-## 还没做
+## 收藏和稍后再看
 
-`bili_mcp/future.py` 和 `xhs_mcp/future.py`：
+都是读渲染后的页面。不点赞、不收藏、不点「播放全部」「批量操作」「删除」「新建收藏夹」。
 
-- B 站收藏夹：`https://space.bilibili.com/{uid}/favlist`
-- B 站稍后再看：`https://www.bilibili.com/watchlater`
-- 小红书收藏：打算打开用户主页，不点击「收藏」。具体 tab 未核对。
+- B 站 `list_favorite_folders`。先打开 `https://space.bilibili.com/`，等它跳到 `/<uid>`，这个 uid 在本次进程里记住。再打开 `/<uid>/favlist`。侧栏「我创建的收藏夹」的 fid 是那一行的 `id`；「默认收藏夹」在地址没有 `fid` 时没有 id。跟过的合集在这次抓到的页面上没有 fid。`kind` 为 `created`、`followed` 或 `other`。
+- B 站 `get_favorite_folder(fid, page=1, sort=recent)`。地址是 `/<uid>/favlist?fid=<fid>&ftype=create`。`sort` 只点「最近收藏 / 最多播放 / 最近投稿」。翻页只点「下一页」。可选 `keyword` 填收藏夹自己的「请输入关键词」，再按标题和 UP 主滤一遍。
+- B 站 `list_watch_later(page, limit)`。`/watchlater/#/list` 在 Playwright 里会变成下载，匿名 `curl` 对 `/watchlater` 和 `/list/watchlater` 都是 HTTP 200、没有 `Location`。能读到列表的是 `https://www.bilibili.com/list/watchlater`，这是播放器页，右侧「稍后再看 1/489」。条目的 bvid 在 `data-key`。面板不显示 UP 主。播放器下面的推荐不解析。滚动的是 `.action-list-body`。
+- B 站 `search_favorites` / `search_watch_later`。没有可靠的全库搜索地址时，就逐页或滚动后在本地做不区分大小写的子串匹配（中文按原文）。结果带文件夹名和 bvid。本机 `list-cache` 记下 `fetched_at`，`refresh=true` 才重抓。缓存不写 cookie。
+- 小红书 `list_favorites(limit)`。自己的 `/user/profile/<uid>?tab=fav&subTab=note`。卡片链接是 `/user/profile/<uid>/<note_id>?xsec_token=...`，原样返回。
+- 小红书 `list_favorite_boards` / `get_favorite_board`。专辑子页是 `subTab=board`。抓到的页面是笔记子页，只有「专辑 · 1」，没有 `/board/` 链接；这时返回 `page_not_understood`，不当成空列表。`/board/<id>` 若是普通文档就按笔记卡片读，否则也是 `page_not_understood`。
+- 小红书 `search_favorites`。网页没有收藏内搜索，滚动后本地过滤。缓存去掉 `xsec_token`。
 
-这些 URL 在导航白名单里，函数固定返回 `not_implemented` 且 `tested: false`。
+打开视频或稍后再看时：Chrome 用 `--autoplay-policy=document-user-activation-required`；路由丢掉 `.m4s`、`.flv`、`.m3u8`、`playurl`、`/x/v2/history`、`/x/click-interface/`；页面里的 `video` / `audio` 会静音并暂停。没有在已登录会话里核对历史记录是否原样没变。播放器文档本身仍会打开，这一步有没有被记进历史，还没验证。
 
 ## 冒烟
 
@@ -127,12 +131,20 @@ uv run bili-mcp-smoke login-status
 uv run bili-mcp-smoke --headed login-qr
 uv run bili-mcp-smoke search '关键词' --limit 5 --page 1
 uv run bili-mcp-smoke get-video BVxxxxxxxxxx
+uv run bili-mcp-smoke list-favorite-folders
+uv run bili-mcp-smoke get-favorite-folder 3953102056 --page 1
+uv run bili-mcp-smoke list-watch-later --limit 20
+uv run bili-mcp-smoke search-favorites '关键词'
+uv run bili-mcp-smoke search-watch-later '关键词'
 
 uv run xhs-mcp-smoke doctor
 uv run xhs-mcp-smoke --headed login-status
 uv run xhs-mcp-smoke --headed login-qr
 uv run xhs-mcp-smoke --headed search '关键词' --limit 5
 uv run xhs-mcp-smoke get-note 'https://www.xiaohongshu.com/explore/笔记id?xsec_token=...'
+uv run xhs-mcp-smoke list-favorites --limit 10
+uv run xhs-mcp-smoke list-favorite-boards
+uv run xhs-mcp-smoke search-favorites '关键词'
 ```
 
 退出码：`0` 成功，`2` 未登录，`3` 需要人处理，`4` 页面没解析成，`5` profile 被占用，`1` 其他失败。`doctor` 不打开网站。
@@ -165,17 +177,23 @@ uv run pytest
 - B 站已登录搜索的第一页和第二页都能读到卡片，第二页的 BV 和第一页不同。
 - 小红书扫码后新设备弹出「短信验证码验证」，正文是「验证码已发送至」加已经打码的号码，按钮是「验证」，旁边是「重新发送」。提交后会跳首页，这次跳转被拒绝，登录态留在 profile 里。`login_status` 能读到 uid。已登录搜索返回 10 条笔记。
 - 两个 profile 在进程退出再开之后还在。Chrome 会把上次的标签恢复出来（包括首页和 `chrome-error`），所以启动时清会话文件并只留一个标签。
+- `f1c56f8` 之后又核对过：B 站 `login_status` 昵称是 Barytes；小红书用 `xhs-mcp-xvfb` 时昵称 `barytes` 来自 `/user/profile/<uid>` 的 `.user-name`（这条现在算核对过）。小红书搜索 `Eric Clapton` 返回 10 条笔记。
+
+收藏夹和稍后再看的选择器是对着已登录时保存的 HTML 写的，本环境没有再打开这两个网站核对：
+
+- B 站收藏夹侧栏 `.fav-sidebar-item`、视频卡片、稍后再看 `.action-list-item-wrap` 的 `data-key`、播放器上的标题 / UP / 简介 / 标签 / 计数。播放器下面的推荐卡片不读。
+- 小红书收藏笔记是 `section.note-item`，链接带 `xsec_token`。夹具里的 token 已换成 `fixture-token`。专辑子页没有单独的抓取，所以专辑列表在只有计数、没有 `/board/` 链接时返回 `page_not_understood`。
+- 笔记详情里多出来的图片、时间、赞藏评计数，夹具是按常见 class 补的，不在那份收藏抓取里，也没有再对过真站。
+- 历史记录有没有因为打开播放器页而增加：没有在已登录会话里核对。
 
 没看过、选择器是按页面结构写的，真登录后可能要改：
 
-- 小红书个人主页上的昵称。已登录时头部没有昵称，代码会打开 `/user/profile/<uid>` 再找 `.user-name`、`.user-nickname` 或标题里的「名字 - 小红书」。这条选择器没有在真站上对过。
-- 小红书笔记卡片（`section.note-item`、`xsec_token` 链接、作者、赞数、播放图标）。未登录时搜索页不给卡片。已登录搜索能读到笔记，但卡片选择器本身没有逐项对过。
+- 小红书搜索结果卡片（和收藏卡片不是同一次核对）。
 - 小红书笔记详情标题和正文。
 - 非海外版 B 站登录页（国内 IP 可能不是 `site=OVERSEAS` 这套 DOM）。
-- 收藏夹、稍后再看。
 - 短信是否必须先勾选协议。代码只会点一个可见的 `input[type=checkbox]`；没有复选框就不会乱点。页面如果提示先同意，会返回 `sms_form_not_ready`。
 
-单元测试用的是按上述结构写的 HTML 片段，不是从网站整页抓下来的文件，所以仓库里没有别人的内容和 token。
+单元测试里，登录和搜索用的是按页面结构写的片段。收藏和稍后再看用的是抓取页裁掉脚本和无关节点后的片段，查询串里的 `xsec_token` 已替换。仓库里没有 cookie。
 
 ## 风险
 

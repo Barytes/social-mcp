@@ -117,6 +117,28 @@ def is_main_document(request) -> bool:
     return navigation or _resource_type(request) == "document"
 
 
+def is_playback_request(request) -> bool:
+    """Media and the player calls that record a view. Images and documents are not this."""
+    try:
+        resource = (request.resource_type or "").lower()
+    except Exception:
+        resource = ""
+    try:
+        url = request.url or ""
+    except Exception:
+        url = ""
+    path = (urlsplit(url).path or "").lower()
+    if resource == "media":
+        return True
+    if path.endswith((".m4s", ".flv", ".m3u8", ".mpd")):
+        return True
+    if "/playurl" in path:
+        return True
+    if "/x/v2/history" in path or "/x/click-interface/" in path:
+        return True
+    return False
+
+
 def should_block_request(policy: DocumentPolicy, request) -> bool:
     """Block feed documents and anything a service worker must not be allowed to do.
 
@@ -127,6 +149,8 @@ def should_block_request(policy: DocumentPolicy, request) -> bool:
     into a data source.
     """
     url = request.url
+    if is_playback_request(request):
+        return True
     decision = policy.classify(url)
     if decision == FEED:
         return True
@@ -220,6 +244,7 @@ class BrowserSession:
                     "--disable-features=Translate",
                     "--disable-session-crashed-bubble",
                     "--hide-crash-restore-bubble",
+                    "--autoplay-policy=document-user-activation-required",
                 ],
                 timeout=60_000,
             )

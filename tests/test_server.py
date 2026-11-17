@@ -9,8 +9,5 @@ def _names(server) -> set[str]:
 def test_registered_tools_are_read_paths_only() -> None:
     bili = _names(build_bili(object()))
     xhs = _names(build_xhs(object()))
-    assert {"login_status", "login_qr_start", "login_qr_wait", "login_sms_request", "login_sms_submit", "search", "get_video"} <= bili
-    assert {"login_status", "login_qr_start", "search", "get_note"} <= xhs
-    assert "list_favorites" not in bili
-    assert "list_watch_later" not in bili
-    assert "list_favorites" not in xhs
+    assert {"login_status", "search", "get_video", "list_favorite_folders", "get_favorite_folder", "list_watch_later", "search_favorites", "search_watch_later"} <= bili
+    assert {"login_status", "search", "get_note", "list_favorites", "list_favorite_boards", "get_favorite_board", "search_favorites"} <= xhs

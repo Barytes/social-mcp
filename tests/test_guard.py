@@ -45,6 +45,21 @@ def test_english_password_login_button_is_not_ours_to_press() -> None:
         assert_fill_allowed(FillPurpose.PHONE, target(placeholder="Please enter password", input_type="password"))
 
 
+def test_folder_pager_and_sort_are_navigation_and_writes_are_not() -> None:
+    assert_click_allowed(ClickPurpose.TURN_PAGE, target(text="下一页"))
+    assert_click_allowed(ClickPurpose.SORT_LIST, target(text="最近收藏"))
+    assert_click_allowed(ClickPurpose.SORT_LIST, target(text="最多播放"))
+    assert_fill_allowed(
+        FillPurpose.LIST_FILTER,
+        target(placeholder="请输入关键词", class_name="fav-list-header-filter__search"),
+    )
+    for label in ("播放全部", "批量操作", "删除", "稍后再看", "新建收藏夹"):
+        with pytest.raises(ReadOnlyViolation):
+            assert_click_allowed(ClickPurpose.TURN_PAGE, target(text=label))
+    with pytest.raises(ReadOnlyViolation):
+        assert_fill_allowed(FillPurpose.LIST_FILTER, target(placeholder="搜索视频、动态", class_name="nav-search-input"))
+
+
 def test_xhs_device_check_button_is_submit_and_resend_is_not() -> None:
     assert_click_allowed(ClickPurpose.SUBMIT_LOGIN, target(text="验证"))
     with pytest.raises(ReadOnlyViolation):

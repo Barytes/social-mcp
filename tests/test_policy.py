@@ -1,8 +1,8 @@
 from mcp_browser.policy import ALLOW, DENY, FEED
-from bili_mcp.future import list_favorites, list_watch_later
 from bili_mcp.policy import BiliPolicy
-from xhs_mcp.future import list_favorites as xhs_favorites
+from bili_mcp.urls import WATCH_LATER_URL, bili_favlist_url
 from xhs_mcp.policy import XhsPolicy
+from xhs_mcp.urls import xhs_favorites_url, xhs_note_url
 
 
 def test_bilibili_feed_and_allowed_pages() -> None:
@@ -17,7 +17,14 @@ def test_bilibili_feed_and_allowed_pages() -> None:
     assert policy.classify("https://passport.bilibili.com/pc/passport/login") == ALLOW
     assert policy.classify("https://account.bilibili.com/account/home") == ALLOW
     assert policy.classify("https://space.bilibili.com/123/favlist") == ALLOW
-    assert policy.classify("https://www.bilibili.com/watchlater") == ALLOW
+    assert policy.classify(bili_favlist_url("19098356", "3953102056")) == ALLOW
+    assert policy.classify("https://space.bilibili.com/") == ALLOW
+    assert policy.classify("https://space.bilibili.com/19098356") == ALLOW
+    assert policy.classify("https://space.bilibili.com/19098356/dynamic") == DENY
+    assert policy.classify("https://www.bilibili.com/watchlater") == DENY
+    assert policy.classify("https://www.bilibili.com/watchlater/") == DENY
+    assert policy.classify(WATCH_LATER_URL) == ALLOW
+    assert policy.classify(WATCH_LATER_URL + "?oid=1&bvid=BV1aaaaaaaaa") == ALLOW
     assert policy.classify("https://passport.biligame.com/x/passport-login/web/crossDomain?x=1") == ALLOW
     assert policy.classify("https://passport.bigfunapp.cn/x/passport-login/web/crossDomain") == ALLOW
     assert policy.classify("https://passport.bilibili.cn/x/passport-login/web/crossDomain") == ALLOW
@@ -43,15 +50,9 @@ def test_xiaohongshu_feed_note_and_risk_page() -> None:
     assert policy.classify("http://www.xiaohongshu.com/website-login/error?error_code=300012") == ALLOW
     assert policy.classify("https://edith.xiaohongshu.com/api/sns/web/v1/search/notes") == DENY
     assert policy.classify("https://www.xiaohongshu.com/user/profile/abc123456") == ALLOW
-
-
-def test_planned_urls_stay_allowlisted_but_unimplemented() -> None:
-    favorites = list_favorites("123")
-    later = list_watch_later()
-    xhs = xhs_favorites("abc123456")
-    assert favorites["tested"] is False
-    assert later["tested"] is False
-    assert xhs["tested"] is False
-    assert BiliPolicy().classify(favorites["planned_url"]) == ALLOW
-    assert BiliPolicy().classify(later["planned_url"]) == ALLOW
-    assert XhsPolicy().classify(xhs["planned_url"]) == ALLOW
+    fav_note = "https://www.xiaohongshu.com/user/profile/63313a0b00000000230241c0/6916c54b000000000703b6f3?xsec_token=fixture-token"
+    assert policy.classify(fav_note) == ALLOW
+    assert policy.is_note(fav_note) is True
+    assert policy.is_note(xhs_favorites_url("63313a0b00000000230241c0")) is False
+    assert policy.classify("https://www.xiaohongshu.com/board/abc1234567") == ALLOW
+    assert policy.is_note(xhs_note_url("6916c54b000000000703b6f3", "fixture-token")) is True

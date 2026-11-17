@@ -124,6 +124,8 @@ def test_bili_video_fixture() -> None:
     assert "简介" in parsed["description"]
     assert parsed["tags"] == ["话题甲", "知识", "旅行"]
     assert parsed["publish_date"] == "2026-11-12 10:00"
+    assert parsed["up_space_url"] == "https://space.bilibili.com/10001"
+    assert parsed["parts"] == []
 
 
 def test_bili_identity_states() -> None:
@@ -179,6 +181,11 @@ def test_xhs_note_and_identity_fixtures() -> None:
     assert parsed["tags"] == ["标签甲", "标签乙"]
     assert parsed["url"] == url
     assert parsed["note_id"] == "64f0abc123456789abcd1234"
+    assert parsed["author"] == "作者甲"
+    assert parsed["author_url"] == "https://www.xiaohongshu.com/user/profile/user123456"
+    assert parsed["images"] == ["https://example.com/note-1.jpg"]
+    assert parsed["like_count"] == "12"
+    assert parsed["publish_time"] == "2026-11-01 上海"
     wall = read("xhs_login_wall.html")
     identity = parse_xhs_identity(wall, "https://www.xiaohongshu.com/login", "登录后查看搜索结果 扫码 手机号登录")
     assert identity["logged_in"] is False

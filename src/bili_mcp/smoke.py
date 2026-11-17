@@ -12,7 +12,7 @@ from mcp_browser.errors import SiteError
 from mcp_browser.session import BrowserSession
 from mcp_browser.smoke import doctor, emit, poll_qr_wait
 
-from bili_mcp import flow
+from bili_mcp import flow, lists
 from bili_mcp.policy import BiliPolicy
 
 
@@ -30,6 +30,22 @@ def main() -> None:
     search.add_argument("--page", type=int, default=1)
     video = sub.add_parser("get-video")
     video.add_argument("bvid")
+    sub.add_parser("list-favorite-folders")
+    folder = sub.add_parser("get-favorite-folder")
+    folder.add_argument("fid")
+    folder.add_argument("--page", type=int, default=1)
+    folder.add_argument("--sort", default="recent")
+    folder.add_argument("--keyword", default="")
+    later = sub.add_parser("list-watch-later")
+    later.add_argument("--page", type=int, default=1)
+    later.add_argument("--limit", type=int, default=30)
+    find_fav = sub.add_parser("search-favorites")
+    find_fav.add_argument("query")
+    find_fav.add_argument("--folder", default="")
+    find_fav.add_argument("--refresh", action="store_true")
+    find_later = sub.add_parser("search-watch-later")
+    find_later.add_argument("query")
+    find_later.add_argument("--refresh", action="store_true")
     args = parser.parse_args()
     if args.headed:
         os.environ["BILI_HEADED"] = "1"
@@ -54,7 +70,17 @@ def main() -> None:
                 return payload
             if args.cmd == "search":
                 return await flow.search_videos(session, args.keyword, args.limit, args.page)
-            return await flow.get_video(session, args.bvid)
+            if args.cmd == "get-video":
+                return await flow.get_video(session, args.bvid)
+            if args.cmd == "list-favorite-folders":
+                return await lists.list_favorite_folders(session)
+            if args.cmd == "get-favorite-folder":
+                return await lists.get_favorite_folder(session, args.fid, args.page, args.sort, args.keyword or None)
+            if args.cmd == "list-watch-later":
+                return await lists.list_watch_later(session, args.page, args.limit)
+            if args.cmd == "search-favorites":
+                return await lists.search_favorites(session, args.query, args.folder or None, args.refresh)
+            return await lists.search_watch_later(session, args.query, args.refresh)
         finally:
             await session.shutdown()
 

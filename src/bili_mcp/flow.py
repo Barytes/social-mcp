@@ -12,6 +12,7 @@ from mcp_browser.actions import (
     safe_click,
     safe_fill,
     save_screenshot,
+    silence_media,
     visible_challenge,
 )
 from mcp_browser.errors import (
@@ -602,6 +603,7 @@ async def get_video(session, bvid: str) -> dict:
 
     async def op(page):
         final = await goto_allowed(page, url, session.policy, session)
+        await silence_media(page)
         for _ in range(15):
             try:
                 if await page.locator("h1.video-title").count():
@@ -609,6 +611,7 @@ async def get_video(session, bvid: str) -> dict:
             except Exception:
                 pass
             await page.wait_for_timeout(1000)
+        await silence_media(page)
         await _ensure_no_challenge(page, session)
         html = await page.content()
         return final, html, page.url
@@ -627,5 +630,18 @@ async def get_video(session, bvid: str) -> dict:
             url=landed or final,
             status="page_not_understood",
         ).payload()
-    parsed.update({"ok": True, "status": "ok"})
+    parsed.update(
+        {
+            "ok": True,
+            "status": "ok",
+            "media_blocked": True,
+            "history_write_verified": False,
+            "history_note": (
+                "Playback requests (.m4s, .flv, m3u8, playurl) and history-report / click-interface "
+                "requests are aborted. The video element is muted and paused. Whether the history "
+                "list stays unchanged was not checked on a logged-in session, because opening the "
+                "player document itself may still be recorded."
+            ),
+        }
+    )
     return parsed

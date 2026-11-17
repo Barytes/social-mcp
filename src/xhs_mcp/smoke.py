@@ -12,7 +12,7 @@ from mcp_browser.errors import SiteError
 from mcp_browser.session import BrowserSession
 from mcp_browser.smoke import doctor, emit, poll_qr_wait
 
-from xhs_mcp import flow
+from xhs_mcp import flow, lists
 from xhs_mcp.policy import XhsPolicy
 
 
@@ -28,7 +28,19 @@ def main() -> None:
     search.add_argument("keyword")
     search.add_argument("--limit", type=int, default=5)
     note = sub.add_parser("get-note")
-    note.add_argument("url")
+    note.add_argument("url", nargs="?", default="")
+    note.add_argument("--note-id", default="")
+    note.add_argument("--xsec-token", default="")
+    fav = sub.add_parser("list-favorites")
+    fav.add_argument("--limit", type=int, default=30)
+    sub.add_parser("list-favorite-boards")
+    board = sub.add_parser("get-favorite-board")
+    board.add_argument("board_id")
+    board.add_argument("--limit", type=int, default=30)
+    find = sub.add_parser("search-favorites")
+    find.add_argument("query")
+    find.add_argument("--board", default="")
+    find.add_argument("--refresh", action="store_true")
     args = parser.parse_args()
     if args.headed:
         os.environ["XHS_HEADED"] = "1"
@@ -53,7 +65,15 @@ def main() -> None:
                 return payload
             if args.cmd == "search":
                 return await flow.search_notes(session, args.keyword, args.limit)
-            return await flow.get_note(session, args.url)
+            if args.cmd == "get-note":
+                return await flow.get_note(session, args.url, args.note_id, args.xsec_token)
+            if args.cmd == "list-favorites":
+                return await lists.list_favorites(session, args.limit)
+            if args.cmd == "list-favorite-boards":
+                return await lists.list_favorite_boards(session)
+            if args.cmd == "get-favorite-board":
+                return await lists.get_favorite_board(session, args.board_id, args.limit)
+            return await lists.search_favorites(session, args.query, args.board or None, args.refresh)
         finally:
             await session.shutdown()
 

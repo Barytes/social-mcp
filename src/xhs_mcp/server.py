@@ -7,17 +7,17 @@ from mcp.types import ToolAnnotations
 
 from mcp_browser.smoke import dumps
 
-from xhs_mcp import flow
+from xhs_mcp import flow, lists
 
 READ = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=True)
 LOGIN = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True)
 
 INSTRUCTIONS = (
-    "只读访问当前这一个小红书账号：登录状态、扫码或短信登录、搜索、笔记详情。"
+    "只读访问当前这一个小红书账号：登录状态、扫码或短信登录、搜索、笔记详情、自己的收藏。"
     "不要点赞、收藏、评论、关注，也不要打开发现页或首页推荐（/explore 不带笔记 id）。"
     "新的网页登录会把同一账号的其他网页会话踢下线。"
     "出现风控或验证页时停止，不要尝试绕过。无头模式在部分网络上会直接进入安全限制页，这时改用有界面模式。"
-    "收藏还没实现。笔记卡片的选择器尚未在已登录状态下核对。"
+    "收藏从自己的主页 tab=fav 读取，不点收藏按钮。"
 )
 
 
@@ -83,8 +83,38 @@ def build_server(session) -> MCPServer:
         return dumps(await flow.search_notes(session, keyword, limit))
 
     @server.tool(annotations=READ, structured_output=False)
-    async def get_note(url: str) -> str:
-        """打开一条笔记详情页，读取标题、正文和标签。url 必须是笔记地址，不能是 /explore 推荐流。"""
-        return dumps(await flow.get_note(session, url))
+    async def get_note(url: str = "", note_id: str = "", xsec_token: str = "") -> str:
+        """打开一条笔记。可以传列表里的 url，或 note_id 加页面上的 xsec_token。
+
+        读取标题、作者和主页、正文、标签、图片、是否视频、时间和页面上的赞藏评计数。
+        不点赞、收藏或关注。发现页推荐流会被拒绝。
+        """
+        return dumps(await flow.get_note(session, url, note_id, xsec_token))
+
+    @server.tool(annotations=READ, structured_output=False)
+    async def list_favorites(limit: int = 30) -> str:
+        """打开自己的主页「收藏 → 笔记」，滚动读取笔记卡片。
+
+        每条含 title、note_id、url（保留 href 里的 xsec_token）、author、like_count、cover。
+        """
+        return dumps(await lists.list_favorites(session, limit))
+
+    @server.tool(annotations=READ, structured_output=False)
+    async def list_favorite_boards() -> str:
+        """打开收藏里的专辑子页。页面上有 /board/ 链接才返回专辑；只有「专辑 · N」而没有链接时不算空列表。"""
+        return dumps(await lists.list_favorite_boards(session))
+
+    @server.tool(annotations=READ, structured_output=False)
+    async def get_favorite_board(board_id: str, limit: int = 30) -> str:
+        """打开 /board/{id} 并读取里面的笔记卡片。打不开成普通文档时返回 page_not_understood。"""
+        return dumps(await lists.get_favorite_board(session, board_id, limit))
+
+    @server.tool(annotations=READ, structured_output=False)
+    async def search_favorites(query: str, board_id: str = "", refresh: bool = False) -> str:
+        """在自己的收藏里按标题或作者搜索。网页没有收藏内搜索，所以滚动后在本地过滤。
+
+        缓存不保存 xsec_token。board_id 为空时搜笔记收藏。
+        """
+        return dumps(await lists.search_favorites(session, query, board_id or None, refresh))
 
     return server
